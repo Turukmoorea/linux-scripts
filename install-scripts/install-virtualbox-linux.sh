@@ -155,3 +155,4 @@ case $installMode in
 		esac
 		;; # end install extension packs
 esac
+done
