@@ -128,23 +128,29 @@ case $installMode in
 		;; # end install VirtualBox
 
 	extension) # install extension packs
+		VBOX_VERSION=$(VBoxManage --version | cut -d '_' -f1)
+		if [ -z "$VBOX_VERSION" ]; then # check if 
+			echo "-> The VBOX version cannot be read. The script has ended."
+			exit
+		fi
+		
 		echo "--------------------------------------------------------------------------------------"
-		echo "-> You can install the following Extension-Packs:"
+		echo "-> You can install the following Extension-Packs ($VBOX_VERSION):"
 		echo
-		echo "      0) I'm done, please finish the script" 
+		echo "      0) I'm done, please terminate the script" 
 		echo "      1) USB 2.0 and 3.0 extensions"
+		echo
 		echo "--------------------------------------------------------------------------------------"
 		read -p "-> Which package do you want to install? [0-1] " installPack
-		VBOX_VERSION=$(VBoxManage --version | cut -d '_' -f1)
 
 		case $installPack in
 			0) # script terminated
 				exit
 				;;
 			1)	# Install USB 2.0 and 3.0 extensions
-				wget https://download.virtualbox.org/virtualbox/$VBOX_VERSION/Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VERSION.vbox-extpack		# Downloading the Extension Packs
-				sudo VBoxManage extpack install Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VERSION.vbox-extpack															# Installing the Extension Packs
-				rm Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VERSION.vbox-extpack																													# Cleanup: Deleting the downloaded Extension Packs
+				wget https://download.virtualbox.org/virtualbox/$VBOX_VERSION/Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VERSION.vbox-extpack	# Downloading the Extension Packs
+				sudo VBoxManage extpack install Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VERSION.vbox-extpack	# Installing the Extension Packs
+				rm Oracle_VM_VirtualBox_Extension_Pack-$VBOX_VERSION.vbox-extpack	# Cleanup: Deleting the downloaded Extension Packs
 				;; # end install USB 2.0 and 3.0 extensions
 		esac
 		;; # end install extension packs

@@ -7,8 +7,22 @@ This repository provides my private collection of scripts for automatically inst
 - **Diverse Application Support**: From web servers to databases to development tools, this repository offers a variety of scripts for different applications.
 - **Ease of Use**: The scripts are designed to be easy to use, catering to both experienced users and beginners.
 
+## Structure:
+- **install-scripts**: `Here you will find various scripts for automating program installations.`
+- **install-guides**: `Here you will find various Markdown guides for installing various programs.`
+- **useful-scripts**: `Here you will find more of my useful scripts.`
+
 ## Provided Scripts:
-- **install-virtualbox-linux.sh**: `To install VirtualBox and its drivers on your Ubuntu devices.` 
+**install-scripts**  
+- **install-virtualbox-linux.sh**:  
+    Automatic installation script for VirtualBox and its drivers on Linux. Offers the choice between installing VirtualBox or extension packs.
+
+- **install-guides**:
+    - **install-keepass-guide.md**: asd
+
+- **useful-scripts**:
+    - **mkscript.sh**: this script creates basic scripts with individual headers and permissions
+
 
 ## Usage Guide:
 1. Clone this repository to your Linux machine.
