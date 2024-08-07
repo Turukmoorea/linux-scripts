@@ -1,6 +1,6 @@
-# Welcome to install-scripts-linux!
+# Welcome to windows-scripts!
 
-This repository provides my private collection of scripts for automatically installing applications on Linux. Whether you're a system administrator regularly deploying new software on servers or a Linux enthusiast looking to automate your personal environment, these scripts are designed to simplify and speed up the installation process.
+This repository provides my private collection of scripts for Linux. Whether you're a system administrator regularly deploying new software on servers or a Linux enthusiast looking to automate your personal environment, these scripts are designed to simplify and speed up the installation process.
 
 ## Features:
 - **Automated Installation**  
