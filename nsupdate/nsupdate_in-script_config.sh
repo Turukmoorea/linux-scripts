@@ -7,7 +7,7 @@ set -euo pipefail
 
 # General script configuration ========================================================================================
 
-log_level="NOTICE"                            # Logging level (EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG)
+log_level="DEBUG"                            # Logging level (EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG)
 verbose=true                                  # true = also print to console
 logfile="/var/log/nsupdate_static.log"        # Log file path
 
@@ -16,6 +16,7 @@ IPV4_ONLY=false
 IPV6_ONLY=false
 TCP_ONLY=true
 PORT=""
+PUBLIC_IPV4="$(curl -sS -4 ifconfig.me 2>/dev/null)"
 
 update_file() {
 # Temporary nsupdate input file
@@ -23,44 +24,17 @@ update_file() {
     chmod 600 "$UPDATE_TEMP_FILE"
     log_message "DEBUG" "Temporary nsupdate file created: $UPDATE_TEMP_FILE"
 
+# Enter after - cat <<EOF > "$UPDATE_TEMP_FILE" - the nsupdate informations =======================
 cat <<EOF > "$UPDATE_TEMP_FILE"
-# Enter here the update file content.
-# Sample: Add a Record ==========================
+server dns.example.ch
+zone example.ch.
 
-# server dns.example.ch
-# zone example.ch.
+prereq yxrrset test.example.ch A
+update delete test.example.ch A
+update add test.example 300 IN A $PUBLIC_IPV4
 
-# prereq nxrrset test.example.ch A
-# update add test.example.ch 300 IN A 192.0.2.42
-
-# send
-# answer
-
-
-# Sample: Update a Record =======================
-
-# server dns.example.ch
-# zone example.ch.
-
-# prereq yxrrset test.example.ch A
-# update delete test.example.ch A
-# update add test.example.ch 300 IN A 198.51.100.99
-
-# send
-# answer
-
-
-# Sample: Delete a Record =======================
-
-# server dns.example.ch
-# zone example.ch.
-
-# prereq yxrrset test.example.ch A
-# update delete test.example.ch A
-
-# send
-# answer
-
+send
+answer
 EOF
 
     # Log the full content of the temp file
@@ -74,12 +48,11 @@ tsig_file() {
     chmod 600 "$TSIG_TEMP_FILE"
     log_message "DEBUG" "Temporary TSIG key file created: $TSIG_TEMP_FILE"
 
+# Enter after - cat <<EOF > "$TSIG_TEMP_FILE" - the TSIG key =======================
 cat <<EOF > "$TSIG_TEMP_FILE"
-# Enter here the TSIG key =======================
-
-key "keyname" {
-    algorithm hmac-sha256;
-    secret "knAG32FwSKzWZ9CyALGSKU0PiRIb6gHSbZcc6vTjFGo=";
+key "sample" {
+        algorithm hmac-sha256;
+        secret "W63dd/63iP0ZqTRCGyCXg+h5XsVGjJRMEr79CSw997U=";
 };
 
 EOF
@@ -134,7 +107,6 @@ log_message "INFO" "Script called: $invocation_command $*"
 
 helppage() {
 cat <<EOF
-
 ================================================================================
  NSUPDATE STATIC – Help Overview
 ================================================================================
@@ -143,7 +115,7 @@ This script is statically configured to perform DNS updates using nsupdate.
 All configuration (TSIG key and update instructions) is defined directly in the script.
 
 --------------------------------------------------------------------------------
- TSIG Key Example (used in /tmp/keyfile.*)
+ TSIG Key Example (insert directly after cat <<EOF > "\$TSIG_TEMP_FILE")
 --------------------------------------------------------------------------------
 
 key "sample" {
@@ -155,7 +127,7 @@ Generate with:
   tsig-keygen sample
 
 --------------------------------------------------------------------------------
- Update File Examples (used in /tmp/update_file.*)
+ Update File Examples (insert directly after cat <<EOF > "\$UPDATE_TEMP_FILE")
 --------------------------------------------------------------------------------
 
 ➤ Add a record:
@@ -192,7 +164,40 @@ update delete test.example.ch A
 send
 answer
 
+--------------------------------------------------------------------------------
+ Dynamic IP Integration (optional)
+--------------------------------------------------------------------------------
+
+You can dynamically fetch your current public IPv4 and use it in the update file.
+
+This is useful for:
+  ✓ Updating dynamic DNS records with your current IP
+  ✓ Adjusting firewall rules dynamically
+  ✓ Automating remote access setups
+
+---------------------
+
+server dns.example.ch
+zone example.ch.
+
+prereq yxrrset test.example.ch A
+update delete test.example.ch A
+update add test.example.ch 300 IN A $PUBLIC_IPV4
+
+send
+answer
+
+--------------------------------------------------------------------------------
+ Notes
+--------------------------------------------------------------------------------
+
+⚠ Update files **must not** contain comments or unnecessary lines.
+   Only valid "nsupdate" commands are allowed.
+
+✅ The final "answer" keyword is **required** for proper logging output.
+
 ================================================================================
+
 EOF
 }
 
