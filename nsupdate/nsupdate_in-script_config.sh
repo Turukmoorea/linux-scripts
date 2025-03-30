@@ -7,7 +7,7 @@ set -euo pipefail
 
 # General script configuration ========================================================================================
 
-log_level="DEBUG"                            # Logging level (EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG)
+log_level="NOTICE"                            # Logging level (EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG)
 verbose=true                                  # true = also print to console
 logfile="/var/log/nsupdate_static.log"        # Log file path
 
