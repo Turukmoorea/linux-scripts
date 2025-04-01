@@ -394,23 +394,49 @@ validate_variables() {
         log_message "ERROR" "No valid nsupdate mode defined: $nsupdate_mode"
     fi
 
-    if [[ -n "$nsupdate_zone" || "$nsupdate_zone" != "*.*" ]]
+    if [[ -z "$nsupdate_zone" || "$nsupdate_zone" == "*.*" ]]; then
         invalid_variables+=1
         log_message "ERROR" "No valid domain zone defined."
+    elif [[ "$nsupdate_zone" != *"." ]]; then
+        nsupdate_zone="${nsupdate_zone}."
+        log_message "NOTICE" "Appended trailing dot to domain zone: '$nsupdate_zone'"
     fi
 
-    if [[ -n "$nsupdate_server" ]]
+   validate_nsupdate_server    # The server validation is too complex and is coded in a separate function.
+
+    if [[ -z "$nsupdate_zone" || "$nsupdate_zone" == "*.*" ]]; then
         invalid_variables+=1
         log_message "ERROR" "No valid domain zone defined."
+    elif [[ "$nsupdate_zone" != *"." ]]; then
+        nsupdate_zone="${nsupdate_zone}."
+        log_message "INFO" "Appended trailing dot to domain zone: '$nsupdate_zone'"
     fi
 
-    validate_nsupdate_server    # The server validation is too complex and is coded in a separate function.
+    if [[ -n "$nsupdate_ttl" ]]; then
+        if [[ ! "$nsupdate_ttl" =~ ^[0-9]+$ || "$nsupdate_ttl" -le 0 ]]; then
+            invalid_variables+=1
+            log_message "ERROR" "Invalid TTL value defined: '$nsupdate_ttl'. It must be a positive integer."
+        else
+            log_message "DEBUG" "Valid TTL defined: '$nsupdate_ttl'"
+        fi
+    else
+        log_message "DEBUG" "No TTL defined. DNS server will use default."
+    fi
 
+    if [[ -n "$nsupdate_class" ]]; then
+        case "$nsupdate_class" in
+            IN|CH|HS|NONE|ANY)
+                log_message "DEBUG" "Valid DNS class defined: '$nsupdate_class'"
+                ;;
+            *)
+                invalid_variables+=1
+                log_message "ERROR" "Invalid DNS class defined: '$nsupdate_class'. Allowed values: IN, CH, HS, NONE, ANY."
+                ;;
+        esac
+    else
+        log_message "DEBUG" "No DNS class defined."
+    fi
 
-
-nsupdate_domain=""            # required
-nsupdate_ttl=""               # optional
-nsupdate_class=""             # optional
 nsupdate_type=""              # required
 nsupdate_data=""              # required
 }
