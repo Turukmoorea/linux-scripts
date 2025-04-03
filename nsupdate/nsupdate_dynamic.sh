@@ -437,8 +437,21 @@ validate_variables() {
         log_message "DEBUG" "No DNS class defined."
     fi
 
-nsupdate_type=""              # required
-nsupdate_data=""              # required
+    if [[ -z "$nsupdate_type" ]]; then
+        invalid_variables+=1
+        log_message "ERROR" "No valid record type defined."
+    fi
+
+    if [[ -z "$nsupdate_data" ]]; then
+        invalid_variables+=1
+        log_message "ERROR" "No valid record datavalue defined."
+    fi
+
+    if [[ "$invalid_variables" != 0 ]]; then
+        log_message "ERROR" "One or more variables are invalid. Check the logfile: $logfile"
+        exit 1
+    fi
+
 }
 
 validate_nsupdate_server() {
