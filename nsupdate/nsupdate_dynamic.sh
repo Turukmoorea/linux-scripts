@@ -426,6 +426,7 @@ validate_variables() {
 
     # Class
     if [[ -n "$nsupdate_class" ]]; then
+        nsupdate_class="${nsupdate_class^^}"
         case "$nsupdate_class" in
             IN|CH|HS|NONE|ANY)
                 log_message "DEBUG" "Valid DNS class: '$nsupdate_class'."
@@ -439,15 +440,16 @@ validate_variables() {
         log_message "DEBUG" "No DNS class defined. Default will be used."
     fi
 
-    # Type (erforderlich, aber keine Validierung gegen BIND-Typen)
+    # Type
     if [[ -n "$nsupdate_type" ]]; then
+        nsupdate_type="${nsupdate_type^^}"
         log_message "DEBUG" "Record type defined: '$nsupdate_type'."
     else
         invalid_variables+=1
         log_message "ERROR" "No record type defined. This value is required (e.g., A, MX, TXT...)."
     fi
 
-    # Data (ebenfalls erforderlich)
+    # Data
     if [[ -n "$nsupdate_data" ]]; then
         log_message "DEBUG" "Record data defined: '$nsupdate_data'."
     else
@@ -455,7 +457,7 @@ validate_variables() {
         log_message "ERROR" "No record data value defined. This value is required."
     fi
 
-    # Abschlussprüfung
+    # Checking the number of invalid variables
     if [[ "$invalid_variables" -ne 0 ]]; then
         log_message "ERROR" "One or more variables are invalid. See logfile: $logfile"
         exit 1
@@ -612,6 +614,11 @@ interactive_prompt() {
 
 # Main Script =======================================================================================================================================
 
+if [[ "${interactive,,}" == "true" ]]; then
+    interactive_prompt
+fi
+
 update_file
 tsig_file
+validate_variables
 nsupdate_run
