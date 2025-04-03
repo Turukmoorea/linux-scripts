@@ -9,7 +9,7 @@ set -euo pipefail
 
 log_level="NOTICE"                            # Logging level (EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG)
 verbose=true                                  # true = also print to console
-logfile="/var/log/nsupdate_static.log"        # Log file path
+logfile="/var/log/nsupdate_dynamic.log"       # Log file path
 
 required_packages=(
     bind9-dnsutils
@@ -233,6 +233,8 @@ check_required_packages() {
 
     log_message "INFO" "All required packages are installed."
 }
+
+check_required_packages
 
 # arguments parser ==================================================================================================================================
 
@@ -613,6 +615,8 @@ interactive_prompt() {
 }
 
 # Main Script =======================================================================================================================================
+
+parse_args
 
 if [[ "${interactive,,}" == "true" ]]; then
     interactive_prompt
