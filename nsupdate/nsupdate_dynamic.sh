@@ -618,7 +618,10 @@ if [[ "${interactive,,}" == "true" ]]; then
     interactive_prompt
 fi
 
+validate_variables
+
+# ------
 update_file
 tsig_file
-validate_variables
 nsupdate_run
+# ------
