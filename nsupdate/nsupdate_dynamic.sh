@@ -369,10 +369,11 @@ parse_args() {
 validate_variables() {
     local invalid_variables=0
 
-    if [[ -n "$keyfile" ]]; then
-    tsig_file
-    log_message "NOTICE" "No keyfile value defined. Use the in-script tsig key."
-
+    # Keyfile / TSIG-Handling
+    if [[ -z "$keyfile" ]]; then
+        tsig_file
+        log_message "NOTICE" "No keyfile value defined. Using in-script TSIG key."
+    else
         if [[ -f "$keyfile" ]]; then
             if grep -qE 'key\s+"(sample|test|example)"\s*{' "$keyfile"; then
                 log_message "WARNING" "The keyfile '$keyfile' uses a placeholder key name (sample/test/example). This should be replaced with a production TSIG key."
@@ -385,73 +386,80 @@ validate_variables() {
         else
             invalid_variables+=1
             log_message "ERROR" "Keyfile '$keyfile' does not exist."
-
         fi
     fi
 
+    # nsupdate mode
     if [[ "$nsupdate_mode" != "add" && "$nsupdate_mode" != "update" && "$nsupdate_mode" != "delete" ]]; then
         invalid_variables+=1
-        log_message "ERROR" "No valid nsupdate mode defined: $nsupdate_mode"
+        log_message "ERROR" "Invalid nsupdate mode: '$nsupdate_mode'. Allowed values are: add, update, delete."
+    else
+        log_message "DEBUG" "Valid nsupdate mode: '$nsupdate_mode'."
     fi
 
+    # Zone
     if [[ -z "$nsupdate_zone" || "$nsupdate_zone" == "*.*" ]]; then
         invalid_variables+=1
         log_message "ERROR" "No valid domain zone defined."
-    elif [[ "$nsupdate_zone" != *"." ]]; then
-        nsupdate_zone="${nsupdate_zone}."
-        log_message "NOTICE" "Appended trailing dot to domain zone: '$nsupdate_zone'"
+    else
+        if [[ "$nsupdate_zone" != *"." ]]; then
+            nsupdate_zone="${nsupdate_zone}."
+            log_message "NOTICE" "Appended trailing dot to domain zone: '$nsupdate_zone'."
+        fi
+        log_message "DEBUG" "Valid domain zone: '$nsupdate_zone'."
     fi
 
-   validate_nsupdate_server    # The server validation is too complex and is coded in a separate function.
+    # Server
+    validate_nsupdate_server || invalid_variables+=1
 
-    if [[ -z "$nsupdate_zone" || "$nsupdate_zone" == "*.*" ]]; then
-        invalid_variables+=1
-        log_message "ERROR" "No valid domain zone defined."
-    elif [[ "$nsupdate_zone" != *"." ]]; then
-        nsupdate_zone="${nsupdate_zone}."
-        log_message "INFO" "Appended trailing dot to domain zone: '$nsupdate_zone'"
-    fi
-
+    # TTL
     if [[ -n "$nsupdate_ttl" ]]; then
         if [[ ! "$nsupdate_ttl" =~ ^[0-9]+$ || "$nsupdate_ttl" -le 0 ]]; then
             invalid_variables+=1
-            log_message "ERROR" "Invalid TTL value defined: '$nsupdate_ttl'. It must be a positive integer."
+            log_message "ERROR" "Invalid TTL value: '$nsupdate_ttl'. Must be a positive integer."
         else
-            log_message "DEBUG" "Valid TTL defined: '$nsupdate_ttl'"
+            log_message "DEBUG" "Valid TTL: '$nsupdate_ttl'."
         fi
     else
         log_message "DEBUG" "No TTL defined. DNS server will use default."
     fi
 
+    # Class
     if [[ -n "$nsupdate_class" ]]; then
         case "$nsupdate_class" in
             IN|CH|HS|NONE|ANY)
-                log_message "DEBUG" "Valid DNS class defined: '$nsupdate_class'"
+                log_message "DEBUG" "Valid DNS class: '$nsupdate_class'."
                 ;;
             *)
                 invalid_variables+=1
-                log_message "ERROR" "Invalid DNS class defined: '$nsupdate_class'. Allowed values: IN, CH, HS, NONE, ANY."
+                log_message "ERROR" "Invalid DNS class: '$nsupdate_class'. Allowed values: IN, CH, HS, NONE, ANY. Default on most DNS servers is: IN."
                 ;;
         esac
     else
-        log_message "DEBUG" "No DNS class defined."
+        log_message "DEBUG" "No DNS class defined. Default will be used."
     fi
 
-    if [[ -z "$nsupdate_type" ]]; then
+    # Type (erforderlich, aber keine Validierung gegen BIND-Typen)
+    if [[ -n "$nsupdate_type" ]]; then
+        log_message "DEBUG" "Record type defined: '$nsupdate_type'."
+    else
         invalid_variables+=1
-        log_message "ERROR" "No valid record type defined."
+        log_message "ERROR" "No record type defined. This value is required (e.g., A, MX, TXT...)."
     fi
 
-    if [[ -z "$nsupdate_data" ]]; then
+    # Data (ebenfalls erforderlich)
+    if [[ -n "$nsupdate_data" ]]; then
+        log_message "DEBUG" "Record data defined: '$nsupdate_data'."
+    else
         invalid_variables+=1
-        log_message "ERROR" "No valid record datavalue defined."
+        log_message "ERROR" "No record data value defined. This value is required."
     fi
 
-    if [[ "$invalid_variables" != 0 ]]; then
-        log_message "ERROR" "One or more variables are invalid. Check the logfile: $logfile"
+    # Abschlussprüfung
+    if [[ "$invalid_variables" -ne 0 ]]; then
+        log_message "ERROR" "One or more variables are invalid. See logfile: $logfile"
         exit 1
     fi
-
 }
 
 validate_nsupdate_server() {
