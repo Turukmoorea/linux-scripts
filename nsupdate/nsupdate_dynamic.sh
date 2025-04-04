@@ -685,7 +685,27 @@ interactive_prompt() {
     
 
     # CLI Code composition
+    composed_command=""
+
+    case "$nsupdate_mode" in
+        add) composed_command+=" --add" ;;
+        update) composed_command+=" --update" ;;
+        delete) composed_command+=" --delete" ;;
+    esac
     
+    # more variables in order
+
+    [[ -n "$keyfile" ]] && composed_command+=" --key \"$keyfile\""
+    echo "$composed_command"
+
+    read -p "Soll der Code ausgeführt werden? Should the code be executed? [y/N] " run_code
+
+    if [[ $(echo "$run_code" | tr '[:upper:]' '[:lower:]') != "y" ]]; then
+        log_message "INFO" "User declined to run the generated command: $composed_command"
+        exit 1
+    fi
+
+    log_message "INFO" "Running generated command: $composed_command"
 }
 
 # Main Script =======================================================================================================================================
