@@ -7,6 +7,7 @@ set -euo pipefail
 
 # General script configuration ======================================================================================================================
 
+umask 077                                     # In general, all newly created files have secure permissions.
 log_level="NOTICE"                            # Logging level (EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG)
 verbose=true                                  # true = also print to console
 logfile="/var/log/nsupdate_dynamic.log"       # Log file path
@@ -39,10 +40,9 @@ nsupdate_data=""              # --data <string>
 
 # In-script TSIG key ================================================================================================================================
 tsig_file() {
-    tsig_temp_file=$(mktemp /tmp/keyfile.XXXXXX)
-    
-# Enter after - cat <<EOF > "$tsig_temp_file" - the TSIG key --------------------------------
-cat <<EOF > "$tsig_temp_file"
+    tsig_temp_file=$(mktemp /dev/shm/keyfile.XXXXXX)
+
+    cat <<EOF > "$tsig_temp_file"
 key "sample" {
         algorithm hmac-sha256;
         secret "W63dd/63iP0ZqTRCGyCXg+h5XsVGjJRMEr79CSw997U=";
@@ -50,7 +50,8 @@ key "sample" {
 EOF
 
     chmod 600 "$tsig_temp_file"
-    log_message "DEBUG" "Temporary TSIG key file created: $tsig_temp_file"
+    log_message "DEBUG" "Temporary TSIG key file created in RAM: $tsig_temp_file"
+    
     keyfile="$tsig_temp_file"
 }
 
@@ -201,7 +202,7 @@ EOF
 
 cleanup() {
     log_message "INFO" "Cleanup started"
-    rm -f "$tsig_temp_file"
+    shred -u --force --zero --remove=wipesync "$keyfile"
     rm -f "$update_temp_file"
     log_message "DEBUG" "Temporary files deleted"
 }
@@ -330,16 +331,17 @@ parse_args() {
                 shift
                 ;;
             # Kombinierte Einzel-Flags wie -it4p
-            -[i46tp]*)
+            -[46tpi]*)
                 arg="${1:1}"  # alles nach dem ersten "-"
                 for (( i=0; i<${#arg}; i++ )); do
                     flag="${arg:$i:1}"
                     case "$flag" in
-                        i) interactive=true ;;
+                        v) verbose=true ;;
                         4) ipv4_only=true ;;
                         6) ipv6_only=true ;;
                         t) tcp_only=true ;;
                         p) nsupdate_data="$(curl -sS -4 ifconfig.me 2>/dev/null)" ;;
+                        i) interactive=true ;;
                         *)
                             log_message "ERROR" "Unknown short option: -$flag"
                             if [[ "$verbose" == "true" ]]; then
@@ -372,7 +374,6 @@ validate_variables() {
 
     # Keyfile / TSIG-Handling
     if [[ -z "$keyfile" ]]; then
-        tsig_file
         log_message "NOTICE" "No keyfile value defined. Using in-script TSIG key."
     else
         if [[ -f "$keyfile" ]]; then
@@ -557,7 +558,7 @@ nsupdate_run() {
 
 update_file() {
     # Temporary nsupdate input file
-    update_temp_file=$(mktemp /tmp/update_file.XXXXXX)
+    update_temp_file=$(mktemp /dev/shm/update_file.XXXXXX)
     chmod 600 "$update_temp_file"
     log_message "DEBUG" "Temporary nsupdate file created: $update_temp_file"
 
@@ -587,7 +588,7 @@ send
 answer
 EOF
             ;;
-        delete)
+        delete|del)
             cat <<EOF > "$update_temp_file"
 server $nsupdate_server
 zone $nsupdate_zone
@@ -611,10 +612,47 @@ EOF
 
 interactive_prompt() {
     # Keyfile
-    
+    while true; do
+        echo "DE: Pfad zum Keyfile eingeben oder leer lassen, um den in-script Key zu verwenden:"
+        read -p "EN: Enter path to keyfile or leave empty to use the in-script key: [IN-SCRIPT/path_to_keyfile] " keyfile
+
+        log_message "DEBUG" "User input for keyfile: '$keyfile'"
+
+        if [ -f "$keyfile" ]; then
+            log_message "INFO" "Valid keyfile path provided: '$keyfile'"
+            break
+        else
+            keyfile=$(echo "$keyfile" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z]//g')
+
+            case "$keyfile" in
+                inscript*|inskript*|inscrit*|inscrpt*|insript*|"")
+                    log_message "INFO" "Using in-script key (input: '$keyfile')"
+                    keyfile=""
+                    break
+                    ;;
+                *)
+                    log_message "WARN" "Invalid keyfile path or unrecognized input ('$keyfile'). Please try again."
+                    ;;
+            esac
+        fi
+    done
 
     # Mode
-    
+    valid_modes=("add" "update" "delete")
+
+    while true; do
+        echo "DE: Den Eintrag neu angelegt, aktualisieren oder löschen?"
+        read -p "EN: Create, update or delete the record? Default: $nsupdate_mode [add/update/delete] " nsupdate_mode
+
+        nsupdate_mode=$(echo "$nsupdate_mode" | tr '[:upper:]' '[:lower:]')
+
+        if [[ " ${valid_modes[*]} " == *" $nsupdate_mode "* ]]; then
+            log_message "INFO" "Selected mode: $nsupdate_mode"
+            break
+        else
+            log_message "WARN" "Invalid input: '$nsupdate_mode'. Expected one of: add, update, delete."
+        fi
+    done
 
     # Server
     
@@ -662,6 +700,8 @@ validate_variables
 
 # ------
 update_file
-tsig_file
+if [[ -z "$keyfile" ]]
+    tsig_file
+fi
 nsupdate_run
 # ------
