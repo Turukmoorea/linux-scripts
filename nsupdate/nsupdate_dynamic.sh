@@ -40,18 +40,17 @@ nsupdate_data=""              # --data <string>
 # In-script TSIG key ================================================================================================================================
 tsig_file() {
     tsig_temp_file=$(mktemp /tmp/keyfile.XXXXXX)
-    chmod 600 "$tsig_temp_file"
-    log_message "DEBUG" "Temporary TSIG key file created: $tsig_temp_file"
-
-# Enter after - cat <<EOF > "$tsig_temp_file" - the TSIG key -------------------------------- <
+    
+# Enter after - cat <<EOF > "$tsig_temp_file" - the TSIG key --------------------------------
 cat <<EOF > "$tsig_temp_file"
 key "sample" {
         algorithm hmac-sha256;
         secret "W63dd/63iP0ZqTRCGyCXg+h5XsVGjJRMEr79CSw997U=";
 };
-
 EOF
 
+    chmod 600 "$tsig_temp_file"
+    log_message "DEBUG" "Temporary TSIG key file created: $tsig_temp_file"
     keyfile="$tsig_temp_file"
 }
 
@@ -611,7 +610,44 @@ EOF
 }
 
 interactive_prompt() {
+    # Keyfile
+    
 
+    # Mode
+    
+
+    # Server
+    
+
+    # IPv4/v6; optional
+    
+
+    # TCP; optional
+    
+
+    # Port; optional
+    
+
+    # Zone
+    
+
+    # Domain
+    
+
+    # TTL
+    
+
+    # Class
+    
+    
+    # Type
+    
+
+    # Data / Public IPv4
+    
+
+    # CLI Code composition
+    
 }
 
 # Main Script =======================================================================================================================================
