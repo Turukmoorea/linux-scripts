@@ -27,6 +27,23 @@ This repository contains my personal collection of Linux scripts. Whether you ar
 - **`script_module/`**  
   Reusable Bash modules such as logging utilities.
 
+## Repository Structure
+
+```text
+linux-scripts/
+├── LICENSE
+├── README.md
+├── mkscript/
+│   └── mkscript.sh
+├── nsupdate/
+│   ├── nsupdate_dynamic.sh
+│   └── nsupdate_in-script_config.sh
+├── script_module/
+│   └── module_log_message.sh
+├── virtualbox/
+│   └── install-virtualbox-linux.sh
+```
+
 ## Usage
 
 1. Clone this repository to your Linux system:
