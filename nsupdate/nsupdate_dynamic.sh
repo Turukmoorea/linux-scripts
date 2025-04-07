@@ -41,7 +41,7 @@ set -euo pipefail
 # General script configuration ===============================================================================
 
 umask 077                                     # Ensure newly created files have strict permissions (owner-only access).
-log_level="NOTICE"                            # Log verbosity level: EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG
+log_level="DEBUG"                            # Log verbosity level: EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG
 verbose=true                                  # If true, log output is also printed to the console
 logfile="/var/log/nsupdate_dynamic.log"       # Path to the log file
 
@@ -71,7 +71,7 @@ nsupdate_class=""             # DNS class (e.g. IN, CH, ANY) (argument: --class)
 nsupdate_type=""              # Record type (e.g. A, AAAA, TXT) (argument: --type)
 nsupdate_data=""              # Record data, e.g. IP address or string (argument: --data)
 
-# Public IPv4 detection (shortcut flag: -p or --public)
+nsupdate_public=false            # Public IPv4 detection (shortcut flag: -p or --public)
 # Example: public_ipv4="$(curl -sS -4 ifconfig.me 2>/dev/null)"
 
 
@@ -185,7 +185,10 @@ log_message "INFO" "Script called: $invocation_command $*"
 # Helppage ==========================================================================================================================================
 
 helppage() {
-cat <<EOF
+
+    log_message "DEBUG" "the helppage is opened"
+
+    cat <<EOF
 ================================================================================
  NSUPDATE DYNAMIC – Help & Overview / Hilfe & Übersicht
 ================================================================================
@@ -289,6 +292,8 @@ Log-Level: $log_level
 
 ================================================================================
 EOF
+
+    return 0
 }
 
 # cleanup ===========================================================================================================================================
@@ -358,9 +363,7 @@ parse_args() {
         case "$1" in
             -h|--help)
                 # Show help page if verbose mode is enabled
-                if [[ "$verbose" == "true" ]]; then
-                    helppage
-                fi
+                helppage
                 log_message "DEBUG" "Helppage is called"
                 exit 0
                 ;;
@@ -395,6 +398,7 @@ parse_args() {
                         log_message "ERROR" "Invalid mode: $2"
                         if [[ "$verbose" == "true" ]]; then
                             helppage
+                            exit 0
                         fi
                         exit 1
                         ;;
@@ -451,7 +455,7 @@ parse_args() {
 
             # Automatically retrieve and set the public IPv4 address
             -p|--public)
-                nsupdate_data="$(curl -sS -4 ifconfig.me 2>/dev/null)"
+                nsupdate_public=true
                 shift
                 ;;
 
@@ -465,12 +469,13 @@ parse_args() {
                         4) ipv4_only=true ;;                                     # Force IPv4 only
                         6) ipv6_only=true ;;                                     # Force IPv6 only
                         t) tcp_only=true ;;                                      # Use TCP only
-                        p) nsupdate_data="$(curl -sS -4 ifconfig.me 2>/dev/null)" ;;  # Set public IP
+                        p) nsupdate_public=true ;;                              # Set public IP
                         i) interactive=true ;;                                   # Enable interactive mode
                         *)
                             log_message "ERROR" "Unknown short option: -$flag"
                             if [[ "$verbose" == "true" ]]; then
                                 helppage
+                                exit 0
                             fi
                             exit 1
                             ;;
@@ -484,6 +489,7 @@ parse_args() {
                 echo "Unknown option: $1" >&2
                 if [[ "$verbose" == "true" ]]; then
                     helppage
+                    exit 0
                 fi
                 exit 1
                 ;;
@@ -561,21 +567,27 @@ validate_variables() {
     validate_nsupdate_server || invalid_variables+=1
 
     # ---------------------------------------------------------------------------------------------------------
-    # Validate TTL (Time to Live) - must be a positive integer
+    # Validate TTL (Time to Live) – only required for add/update modes
     # ---------------------------------------------------------------------------------------------------------
-    if [[ -n "$nsupdate_ttl" ]]; then
-        if [[ ! "$nsupdate_ttl" =~ ^[0-9]+$ || "$nsupdate_ttl" -le 0 ]]; then
-            invalid_variables+=1
-            log_message "ERROR" "Invalid TTL value: '$nsupdate_ttl'. Must be a positive integer."
+    if [[ "$nsupdate_mode" == "add" || "$nsupdate_mode" == "update" ]]; then
+        if [[ -n "$nsupdate_ttl" ]]; then
+            if [[ ! "$nsupdate_ttl" =~ ^[0-9]+$ || "$nsupdate_ttl" -le 0 ]]; then
+                invalid_variables+=1
+                log_message "ERROR" "Invalid TTL value: '$nsupdate_ttl'. Must be a positive integer."
+            else
+                log_message "DEBUG" "Valid TTL: '$nsupdate_ttl'."
+            fi
         else
-            log_message "DEBUG" "Valid TTL: '$nsupdate_ttl'."
+            log_message "DEBUG" "No TTL defined. DNS server will use default."
         fi
     else
-        log_message "DEBUG" "No TTL defined. DNS server will use default."
+        log_message "DEBUG" "TTL validation skipped – not required for mode: $nsupdate_mode"
     fi
 
+
     # ---------------------------------------------------------------------------------------------------------
-    # Validate DNS class (optional: default is usually 'IN')
+    # Validate DNS class (optional – default is usually 'IN')
+    # Only check syntax if a class was provided; otherwise, skip validation.
     # ---------------------------------------------------------------------------------------------------------
     if [[ -n "$nsupdate_class" ]]; then
         nsupdate_class="${nsupdate_class^^}"  # Convert to uppercase
@@ -589,29 +601,48 @@ validate_variables() {
                 ;;
         esac
     else
-        log_message "DEBUG" "No DNS class defined. Default will be used."
+        log_message "DEBUG" "No DNS class provided – using DNS server default."
     fi
 
+
     # ---------------------------------------------------------------------------------------------------------
-    # Validate DNS record type (required, e.g. A, AAAA, TXT, MX)
+    # Validate DNS record type – required for add/update, optional but checked if present for delete
     # ---------------------------------------------------------------------------------------------------------
     if [[ -n "$nsupdate_type" ]]; then
         nsupdate_type="${nsupdate_type^^}"  # Normalize to uppercase
         log_message "DEBUG" "Record type defined: '$nsupdate_type'."
     else
-        invalid_variables+=1
-        log_message "ERROR" "No record type defined. This value is required (e.g., A, MX, TXT...)."
+        if [[ "$nsupdate_mode" == "add" || "$nsupdate_mode" == "update" ]]; then
+            invalid_variables+=1
+            log_message "ERROR" "No record type defined. This value is required (e.g., A, MX, TXT...)."
+        else
+            log_message "DEBUG" "No record type defined – skipping check for mode: $nsupdate_mode"
+        fi
     fi
+
 
     # ---------------------------------------------------------------------------------------------------------
     # Validate record data (required, e.g. IP address or string)
     # ---------------------------------------------------------------------------------------------------------
-    if [[ -n "$nsupdate_data" ]]; then
-        log_message "DEBUG" "Record data defined: '$nsupdate_data'."
+    if [[ "$nsupdate_mode" == "add" || "$nsupdate_mode" == "update" ]]; then
+        if [[ "${nsupdate_public:-false}" == "true" ]]; then
+            nsupdate_data="$(curl -sS -4 ifconfig.me 2>/dev/null)"
+            if [[ -n "$nsupdate_data" ]]; then
+                log_message "DEBUG" "Public IPv4 address fetched and set as data: $nsupdate_data"
+            else
+                invalid_variables+=1
+                log_message "ERROR" "Failed to retrieve public IPv4 address."
+            fi
+        elif [[ -n "$nsupdate_data" ]]; then
+            log_message "DEBUG" "Record data defined: '$nsupdate_data'."
+        else
+            invalid_variables+=1
+            log_message "ERROR" "No record data value defined. This value is required."
+        fi
     else
-        invalid_variables+=1
-        log_message "ERROR" "No record data value defined. This value is required."
+        log_message "DEBUG" "DNS data validation skipped – not required for mode: $nsupdate_mode"
     fi
+
 
     # ---------------------------------------------------------------------------------------------------------
     # Final check: abort if any variable was found invalid
@@ -751,29 +782,38 @@ update_file() {
         # Mode: add – create a new DNS record if it does not already exist
         # ----------------------------------------------------------------------
         add)
+            update_add_line="update add $nsupdate_domain $nsupdate_ttl"
+            [[ -n "$nsupdate_class" ]] && update_add_line+=" $nsupdate_class"
+            update_add_line+=" $nsupdate_type $nsupdate_data"
+
             cat <<EOF > "$update_temp_file"
 server $nsupdate_server
 zone $nsupdate_zone
 
 prereq nxrrset $nsupdate_domain $nsupdate_type
-update add $nsupdate_domain $nsupdate_ttl $nsupdate_class $nsupdate_type $nsupdate_data
+$update_add_line
 
 send
 answer
 EOF
             ;;
 
+
         # ----------------------------------------------------------------------
         # Mode: update – replace an existing DNS record with a new one
         # ----------------------------------------------------------------------
         update)
-            cat <<EOF > "$update_temp_file"
+            update_add_line="update add $nsupdate_domain $nsupdate_ttl"
+            [[ -n "$nsupdate_class" ]] && update_add_line+=" $nsupdate_class"
+            update_add_line+=" $nsupdate_type $nsupdate_data"
+
+cat <<EOF > "$update_temp_file"
 server $nsupdate_server
 zone $nsupdate_zone
 
 prereq yxrrset $nsupdate_domain $nsupdate_type
 update delete $nsupdate_domain $nsupdate_type
-update add $nsupdate_domain $nsupdate_ttl $nsupdate_class $nsupdate_type $nsupdate_data
+$update_add_line
 
 send
 answer
@@ -784,7 +824,8 @@ EOF
         # Mode: delete – remove an existing DNS record
         # ----------------------------------------------------------------------
         delete|del)
-            cat <<EOF > "$update_temp_file"
+            if [[ -n "$nsupdate_type" ]]; then
+                cat <<EOF > "$update_temp_file"
 server $nsupdate_server
 zone $nsupdate_zone
 
@@ -794,6 +835,17 @@ update delete $nsupdate_domain $nsupdate_type
 send
 answer
 EOF
+            else
+                cat <<EOF > "$update_temp_file"
+server $nsupdate_server
+zone $nsupdate_zone
+
+update delete $nsupdate_domain
+
+send
+answer
+EOF
+            fi
             ;;
 
         # ----------------------------------------------------------------------
@@ -847,7 +899,7 @@ interactive_prompt() {
                     ;;
                 *)
                     # If input is neither a file nor a recognized keyword, notify the user and repeat the prompt
-                    log_message "WARN" "Invalid keyfile path or unrecognized input ('$keyfile'). Please try again."
+                    log_message "WARNING" "Invalid keyfile path or unrecognized input ('$keyfile'). Please try again."
                     ;;
             esac
         fi
@@ -875,7 +927,7 @@ interactive_prompt() {
             break
         else
             # If the input is not valid, show a warning and ask again
-            log_message "WARN" "Invalid input: '$nsupdate_mode'. Expected one of: add, update, delete."
+            log_message "WARNING" "Invalid input: '$nsupdate_mode'. Expected one of: add, update, delete."
         fi
     done
 
@@ -886,8 +938,11 @@ interactive_prompt() {
     # The user can enter an IP address (IPv4/IPv6) or a fully qualified domain name (FQDN).
     # If left empty, the previously set value (if any) will be reused.
     # ---------------------------------------------------------------------------------------------------------
+    default_nsupdate_server=""
+    [[ -n "$nsupdate_server" ]] && default_nsupdate_server="Default: $nsupdate_server"
+
     echo "DE: FQDN, IPv4 oder IPv6 des gewünschten DNS Servers?"
-    read -p "EN: FQDN, IPv4 or IPv6 of the desired DNS server? Default: $nsupdate_server [empty for default] " temp_nsupdate_server
+    read -p "EN: FQDN, IPv4 or IPv6 of the desired DNS server? $default_nsupdate_server [empty for default] " temp_nsupdate_server
 
     # If the user provided input, override the current value
     if [[ -n "$temp_nsupdate_server" ]]; then
@@ -922,6 +977,8 @@ interactive_prompt() {
 
     # Normalize input to lowercase and compare
     if [[ "$(echo "$change_settings" | tr '[:upper:]' '[:lower:]')" == "y" ]]; then
+        log_message "INFO" "User confirmed: Settings change requested (input: '$change_settings')"
+
         while true; do
             # Display available options for modification
             echo ""
@@ -964,7 +1021,7 @@ interactive_prompt() {
                         port="$input_port"
                         log_message "INFO" "DNS port set to: $port"
                     else
-                        log_message "WARN" "Invalid input for port: '$input_port'. Must be a positive integer."
+                        log_message "WARNING" "Invalid input for port: '$input_port'. Must be a positive integer."
                     fi
                     ;;
 
@@ -976,10 +1033,12 @@ interactive_prompt() {
 
                 *)
                     # Catch all: unrecognized input
-                    log_message "WARN" "Unknown choice: '$setting_choice'"
+                    log_message "WARNING" "Unknown choice: '$setting_choice'"
                     ;;
             esac
         done
+    else
+        log_message "INFO" "User skipped settings change (input: '$change_settings')"
     fi
 
 
@@ -1008,7 +1067,7 @@ interactive_prompt() {
             break
         else
             # Neither input nor default exists → prompt again
-            log_message "WARN" "Zone is required but not provided."
+            log_message "WARNING" "Zone is required but not provided."
             echo "DE: Zone ist erforderlich. EN: Zone is required."
         fi
     done
@@ -1038,57 +1097,52 @@ interactive_prompt() {
             break
         else
             # No input and no default value → user must try again
-            log_message "WARN" "Domain is required but not provided."
+            log_message "WARNING" "Domain is required but not provided."
             echo "DE: Domain ist erforderlich. EN: Domain is required."
         fi
     done
 
 
     # ---------------------------------------------------------------------------------------------------------
-    # TTL (optional, with default)
-    # Ask the user to define the TTL (Time to Live) for the DNS record.
-    # TTL controls how long the record is cached by resolvers.
-    # If no input is given and no previous value exists, fall back to a default (3600 seconds).
+    # TTL (optional, with default – only required for add or update modes)
+    # Time-To-Live defines how long the DNS record is cached by resolvers.
+    # This input is skipped for delete mode.
     # ---------------------------------------------------------------------------------------------------------
-    default_nsupdate_ttl=""
-    [[ -n "$nsupdate_ttl" ]] && default_nsupdate_ttl="Default: $nsupdate_ttl"
+    if [[ "$nsupdate_mode" == "add" || "$nsupdate_mode" == "update" ]]; then
+        default_nsupdate_ttl=""
+        [[ -n "$nsupdate_ttl" ]] && default_nsupdate_ttl="Default: $nsupdate_ttl"
 
-    echo "DE: Bitte TTL (Time to Live) eingeben. "
-    read -p "EN: Please enter TTL (Time to Live). $default_nsupdate_ttl [>=300] " input
+        echo "DE: Bitte TTL (Time to Live) eingeben."
+        read -p "EN: Please enter TTL (Time to Live). $default_nsupdate_ttl [>=300] " input
 
-    if [[ -n "$input" ]]; then
-        # Set the user-provided value
-        nsupdate_ttl="$input"
-        log_message "INFO" "TTL set to: $nsupdate_ttl"
-    elif [[ -z "$nsupdate_ttl" ]]; then
-        # No input and no default → use internal default
-        nsupdate_ttl=3600
-        log_message "INFO" "TTL not provided – defaulting to: $nsupdate_ttl"
-    else
-        # Retain previously set value
-        log_message "INFO" "Using previously set TTL: $nsupdate_ttl"
+        if [[ -n "$input" ]]; then
+            nsupdate_ttl="$input"
+            log_message "INFO" "TTL set to: $nsupdate_ttl"
+        elif [[ -z "$nsupdate_ttl" ]]; then
+            log_message "INFO" "TTL not provided, using the server default"
+        else
+            log_message "INFO" "Using previously set TTL: $nsupdate_ttl"
+        fi
     fi
 
     # ---------------------------------------------------------------------------------------------------------
-    # Class (optional, with default fallback to server default)
-    # Ask the user to enter the DNS class for the record (usually 'IN' for Internet).
-    # This value is optional. If left empty, the DNS server's default class will be used.
+    # DNS class (optional)
+    # Defines the DNS class (typically 'IN' for Internet).
+    # If not provided, the DNS server's default class will be used.
     # ---------------------------------------------------------------------------------------------------------
     default_nsupdate_class="Default: ${nsupdate_class:-Use server default}"
     echo "DE: Bitte DNS Klasse eingeben (z.B. IN). Leer lassen für Standardwert."
     read -p "EN: Please enter DNS class (e.g. IN). Leave empty to use default. $default_nsupdate_class [string]: " input
 
     if [[ -n "$input" ]]; then
-        # Set user-provided class
         nsupdate_class="$input"
         log_message "INFO" "DNS class set via user input: $nsupdate_class"
     elif [[ -n "$nsupdate_class" ]]; then
-        # Retain existing default if already set
         log_message "INFO" "No input provided – using existing default DNS class: $nsupdate_class"
     else
-        # No value defined at all → server-side default will be used
         log_message "INFO" "No DNS class defined – using server-side default"
     fi
+
 
     # ---------------------------------------------------------------------------------------------------------
     # Type (required)
@@ -1101,8 +1155,8 @@ interactive_prompt() {
         [[ -n "$nsupdate_type" ]] && default_nsupdate_type="Default: $nsupdate_type"
 
         # Ask user to input the DNS type (in bilingual format)
-        echo "DE: Bitte DNS Typ eingeben (A, AAAA, CNAME, etc.)."
-        read -p "EN: Please enter DNS type (A, AAAA, CNAME, etc.). $default_nsupdate_type [string] " input
+        echo "echo DE: Bitte gib den DNS-Typ ein (z. B. A, AAAA, CNAME etc.). Bei Löschvorgängen nur erforderlich, wenn mehrere Typen vorhanden sind."
+        read -p "EN: Please enter the DNS record type (e.g. A, AAAA, CNAME, etc.). Required for deletion only if multiple types exist. $default_nsupdate_type [string] " input
 
         if [[ -n "$input" ]]; then
             # Set the entered value
@@ -1114,58 +1168,58 @@ interactive_prompt() {
             log_message "INFO" "Using default DNS type: $nsupdate_type"
             break
         else
-            # Missing and required → prompt again
-            log_message "WARN" "DNS type is required but not provided."
-            echo "DE: DNS Typ ist erforderlich. EN: DNS type is required."
-        fi
-    done
-
-    # ---------------------------------------------------------------------------------------------------------
-    # Data / Public IPv4 (required)
-    # Prompt the user to provide the actual DNS data – e.g., an IP address, FQDN, or text value.
-    # If the keyword 'PUBLIC' is entered, the script will fetch the current public IPv4 automatically.
-    # This field is required and must not be empty.
-    # ---------------------------------------------------------------------------------------------------------
-    while true; do
-        default_nsupdate_data=""
-        [[ -n "$nsupdate_data" ]] && default_nsupdate_data="Default: $nsupdate_data"
-
-        # Ask for record data with bilingual instructions
-        echo "DE: Bitte IP-Adresse oder Daten eingeben (PUBLIC = öffentliche IPv4 ermitteln)."
-        read -p "EN: Enter IP address or data (PUBLIC = fetch public IPv4). $default_nsupdate_data: " input
-
-        # Normalize user input for keyword comparison (case-insensitive)
-        input_normalized=$(echo "$input" | tr '[:upper:]' '[:lower:]')
-
-        if [[ -n "$input" ]]; then
-            if [[ "$input_normalized" == "public" ]]; then
-                # If user typed PUBLIC → fetch current public IPv4 using curl
-                nsupdate_data="$(curl -sS -4 ifconfig.me 2>/dev/null)"
-                if [[ -n "$nsupdate_data" ]]; then
-                    log_message "INFO" "Public IPv4 address auto-detected and set: $nsupdate_data"
-                    break
-                else
-                    # Could not fetch public IP, try again
-                    log_message "WARN" "Failed to detect public IPv4 address. Trying again..."
-                    echo "DE: Keine gültige öffentliche IP ermittelbar. EN: Could not determine public IP."
-                fi
+            if [[ "$nsupdate_mode" == "add" || "$nsupdate_mode" == "update" ]]; then
+                # Missing and required → prompt again
+                log_message "WARNING" "DNS type is required but not provided."
+                echo "DE: DNS Typ ist erforderlich. EN: DNS type is required."
             else
-                # Use user-provided input directly
-                nsupdate_data="$input"
-                log_message "INFO" "DNS data set via user input: $nsupdate_data"
                 break
             fi
-        elif [[ -n "$nsupdate_data" ]]; then
-            # If nothing entered, but a previous value exists, use it
-            log_message "INFO" "No input provided – using existing DNS data: $nsupdate_data"
-            break
-        else
-            # Missing and required → re-prompt
-            log_message "WARN" "DNS data is required and not provided. Prompting again..."
-            echo "DE: Eingabe erforderlich. EN: Input required."
         fi
     done
 
+    # ---------------------------------------------------------------------------------------------------------
+    # Record data (required for add/update)
+    # Asks the user to enter the value for the DNS record – e.g., an IP address, a hostname, or a string.
+    # Special keyword 'PUBLIC' can be used to auto-fetch the current public IPv4.
+    # Skipped entirely for delete mode.
+    # ---------------------------------------------------------------------------------------------------------
+    input_normalized=""
+
+    if [[ "$nsupdate_mode" == "add" || "$nsupdate_mode" == "update" ]]; then
+        while true; do
+            default_nsupdate_data=""
+            [[ -n "$nsupdate_data" ]] && default_nsupdate_data="Default: $nsupdate_data"
+
+            echo "DE: Bitte IP-Adresse oder Daten eingeben (PUBLIC = öffentliche IPv4 ermitteln)."
+            read -p "EN: Enter IP address or data (PUBLIC = fetch public IPv4). $default_nsupdate_data: " input
+
+            input_normalized=$(echo "$input" | tr '[:upper:]' '[:lower:]')
+
+            if [[ -n "$input" ]]; then
+                if [[ "$input_normalized" == "public" ]]; then
+                    nsupdate_data="$(curl -sS -4 ifconfig.me 2>/dev/null)"
+                    if [[ -n "$nsupdate_data" ]]; then
+                        log_message "INFO" "Public IPv4 address auto-detected and set: $nsupdate_data"
+                        break
+                    else
+                        log_message "WARNING" "Failed to detect public IPv4 address. Trying again..."
+                        echo "DE: Keine gültige öffentliche IP ermittelbar. EN: Could not determine public IP."
+                    fi
+                else
+                    nsupdate_data="$input"
+                    log_message "INFO" "DNS data set via user input: $nsupdate_data"
+                    break
+                fi
+            elif [[ -n "$nsupdate_data" ]]; then
+                log_message "INFO" "No input provided – using existing DNS data: $nsupdate_data"
+                break
+            else
+                log_message "WARNING" "DNS data is required and not provided. Prompting again..."
+                echo "DE: Eingabe erforderlich. EN: Input required."
+            fi
+        done
+    fi
 
     # ---------------------------------------------------------------------------------------------------------
     # CLI Code composition
@@ -1196,19 +1250,25 @@ interactive_prompt() {
     # Append long options for all DNS-related parameters, if set
     # Each value is wrapped in double quotes to preserve special characters or spaces
     # ---------------------------------------------------------------------------------------------------------
-    [[ -n "$nsupdate_server" ]] && composed_command+=" --server \"$nsupdate_server\""
-    [[ -n "$nsupdate_zone" ]] && composed_command+=" --zone \"$nsupdate_zone\""
-    [[ -n "$nsupdate_domain" ]] && composed_command+=" --domain \"$nsupdate_domain\""
-    [[ -n "$nsupdate_ttl" ]] && composed_command+=" --ttl \"$nsupdate_ttl\""
-    [[ -n "$nsupdate_class" ]] && composed_command+=" --class \"$nsupdate_class\""
-    [[ -n "$nsupdate_type" ]] && composed_command+=" --type \"$nsupdate_type\""
-    [[ -n "$nsupdate_data" ]] && composed_command+=" --data \"$nsupdate_data\""
-    [[ -n "$keyfile" ]] && composed_command+=" --key \"$keyfile\""
+    [[ -n "$nsupdate_server" ]] && composed_command+=" --server $nsupdate_server"
+    [[ -n "$nsupdate_zone" ]] && composed_command+=" --zone $nsupdate_zone"
+    [[ -n "$nsupdate_domain" ]] && composed_command+=" --domain $nsupdate_domain"
+    [[ -n "$nsupdate_ttl" ]] && composed_command+=" --ttl $nsupdate_ttl"
+    [[ -n "$nsupdate_class" ]] && composed_command+=" --class $nsupdate_class"
+    [[ -n "$nsupdate_type" ]] && composed_command+=" --type $nsupdate_type"
+    [[ "$input_normalized" != "public" && -n "$nsupdate_data" ]] && composed_command+=" --data $nsupdate_data"
+    [[ -n "$keyfile" ]] && composed_command+=" --key $keyfile"
 
     # ---------------------------------------------------------------------------------------------------------
     # Display the fully composed command to the user for transparency
     # ---------------------------------------------------------------------------------------------------------
-    echo "$composed_command"
+    echo ""
+    echo "================================================================================"
+    echo " Composed Command Line / Zusammengesetzte Befehlszeile"
+    echo "================================================================================"
+    echo ""
+    echo "$(basename "$0")$composed_command"
+    echo ""
 
     # ---------------------------------------------------------------------------------------------------------
     # Ask for user confirmation before executing the command
@@ -1231,7 +1291,7 @@ interactive_prompt() {
 # Parse all command-line arguments to populate configuration variables.
 # This must be called first to ensure all parameters are available for validation or interaction.
 # ---------------------------------------------------------------------------------------------------------
-parse_args
+parse_args "$@"
 
 # ---------------------------------------------------------------------------------------------------------
 # If interactive mode is enabled, launch the interactive input wizard.
@@ -1258,7 +1318,7 @@ update_file
 # If no external keyfile was provided, use the in-script TSIG key.
 # The function tsig_file creates a temporary keyfile in memory (/dev/shm).
 # ---------------------------------------------------------------------------------------------------------
-if [[ -z "$keyfile" ]]
+if [[ -z "$keyfile" ]]; then
     tsig_file
 fi
 
@@ -1267,3 +1327,4 @@ fi
 # Logs the outcome (success or error) including full output from nsupdate.
 # ---------------------------------------------------------------------------------------------------------
 nsupdate_run
+
