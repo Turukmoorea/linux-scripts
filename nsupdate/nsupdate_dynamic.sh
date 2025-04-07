@@ -41,7 +41,7 @@ set -euo pipefail
 # General script configuration ===============================================================================
 
 umask 077                                     # Ensure newly created files have strict permissions (owner-only access).
-log_level="DEBUG"                            # Log verbosity level: EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG
+log_level="NOTICE"                            # Log verbosity level: EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG
 verbose=true                                  # If true, log output is also printed to the console
 logfile="/var/log/nsupdate_dynamic.log"       # Path to the log file
 
@@ -207,23 +207,23 @@ Es kann interaktiv oder via CLI-Argumente gesteuert werden.
  -6                              Force IPv6-only                 / Erzwinge IPv6-only
  -t                              Use TCP instead of UDP          / Verwende TCP statt UDP
  -p, --public                    Use public IPv4 (auto-fetch)    / Verwende öffentliche IPv4
+ -v                              Verbose console output          / Konsolenausgabe aktivieren
 
  -k, --key <file>                Path to TSIG key file           / Pfad zur TSIG Key-Datei
-     --mode <add|update|delete>  DNS update mode                 / Modus für DNS-Update
-     --server <fqdn/ip>          DNS server (FQDN or IP)         / DNS Server Adresse
-     --zone <zone>               DNS zone                        / DNS Zone (z.B. example.ch.)
-     --domain <fqdn>             Record FQDN or subdomains       / Vollständiger Domain-Eintrag oder Subdomain
-
-     --ttl <seconds>             TTL (Time-To-Live)              / TTL in Sekunden
-     --class <IN|ANY|CH...>      DNS class (optional)            / DNS Klasse (optional)
-     --type <A|AAAA|MX...>       DNS record type                 / DNS Record Typ
-     --data <value>              Record data (e.g. IP)           / Datenwert (z.B. IP)
+     --log <LEVEL>              Set log level (DEBUG..EMERGENCY)/ Log-Level setzen (DEBUG–EMERGENCY)
+     --mode <add|update|delete> DNS update mode                 / Modus für DNS-Update
+     --server <fqdn/ip>         DNS server (FQDN or IP)         / DNS Server Adresse
+     --zone <zone>              DNS zone                        / DNS Zone (z.B. example.ch.)
+     --domain <fqdn>            Record FQDN or subdomains       / Vollständiger Domain-Eintrag oder Subdomain
+     --ttl <seconds>            TTL (Time-To-Live)              / TTL in Sekunden
+     --class <IN|ANY|CH...>     DNS class (optional)            / DNS Klasse (optional)
+     --type <A|AAAA|MX...>      DNS record type                 / DNS Record Typ
+     --data <value>             Record data (e.g. IP)           / Datenwert (z.B. IP)
 
 Example:
 ./nsupdate.sh --add -4tp --server dns.example.ch --zone example.ch. \\
               --domain test.example.ch --ttl 3600 --class IN \\
               --type A --data 203.0.113.42 --key /etc/keyfile.key
-Beispiel: Wie oben – ersetzt durch eigene Werte.
 
 --------------------------------------------------------------------------------
  Interactive Mode / Interaktiver Modus
@@ -276,6 +276,7 @@ Generieren mit: Obigen Befehl nutzen und Keydatei speichern.
  ✓ TTL ≥ 300 recommended                        / TTL ≥ 300 empfohlen
  ✓ Use 'answer' in nsupdate for logging         / 'answer' aktiviert Antwort-Logging
  ✓ Ensure correct system time (TSIG uses time)  / Zeit muss korrekt sein (TSIG ist zeitbasiert)
+ ✓ Use public IPv4 detection if behind NAT      / Öffentliche IP verwenden hinter NAT
 
 --------------------------------------------------------------------------------
  Security / Sicherheit
@@ -287,10 +288,26 @@ Generieren mit: Obigen Befehl nutzen und Keydatei speichern.
 ✔ Automatic secure deletion on script exit
 ✔ Automatisches, sicheres Löschen beim Skriptende
 
+✔ Optional in-script key usage (fallback)       / Optionaler Key im RAM (Fallback)
+
+✔ Detailed logging with selectable log level    / Ausführliches Logging mit wählbarem Log-Level
+
+Available log levels / Verfügbare Log-Level:
+
+  EMERGENCY   Kritischer Systemfehler – sofortiger Abbruch
+  ALERT       Sofortige Aufmerksamkeit erforderlich
+  CRITICAL    Kritischer Fehler im Ablauf
+  ERROR       Normale Fehler – Skript kann ggf. weiterlaufen
+  WARNING     Warnung – Hinweise auf Probleme
+  NOTICE      Allgemeine Hinweise auf Aktionen
+  INFO        Informationsausgaben über Abläufe
+  DEBUG       Detaillierte Debug-Informationen für Entwickler:innen
+
 Logfile: $logfile
 Log-Level: $log_level
 
 ================================================================================
+
 EOF
 
     return 0
@@ -362,12 +379,15 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             -h|--help)
-                # Show help page if verbose mode is enabled
                 helppage
                 log_message "DEBUG" "Helppage is called"
                 exit 0
                 ;;
 
+            --log|--level)
+                log_level="$2"
+                log_message "INFO" "Set logging level to $log_level"
+                ;;
             # Options with arguments (key-value style)
             -k|--key)
                 keyfile="$2"
