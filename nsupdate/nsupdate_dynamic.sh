@@ -43,7 +43,7 @@ set -euo pipefail
 umask 077                                     # Ensure newly created files have strict permissions (owner-only access).
 log_level="NOTICE"                            # Log verbosity level: EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFO, DEBUG
 verbose=true                                  # If true, log output is also printed to the console
-logfile="/var/log/nsupdate_dynamic.log"       # Path to the log file
+log_file=""                                   # Custom Path to the log file
 
 # List of required system packages. The script will verify they are installed before continuing.
 required_packages=(
