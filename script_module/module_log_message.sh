@@ -38,18 +38,6 @@
 #
 # Logging ===========================================================================================================================================
 
-# Ensure logfile variable is set before continuing
-if [[ -z "$logfile" ]]; then
-    echo "ERROR: logfile variable is not set." >&2
-    exit 1
-fi
-
-# Ensure the directory where the logfile should be written is writable.
-if [[ ! -w "$(dirname "$logfile")" ]]; then
-    echo "ERROR: Cannot write to logfile location: $logfile" >&2
-    exit 1
-fi
-
 # Logging function with full syslog-style severity level support.
 # Parameters:
 #   $1 - Log level (e.g. DEBUG, INFO, NOTICE, WARNING, ERROR, etc.)
@@ -72,6 +60,18 @@ log_message() {
     local function_name="${FUNCNAME[1]:-main}"                                       # Calling function's name (fallback: 'main')
     local line_number="${BASH_LINENO[0]}"                                            # Line number where the log_message was called
     local prefix="${log_prefix:-$(basename "$0")}"                                   # Default prefix is script name
+
+    # Ensure logfile variable is set before continuing
+    if [[ -z "$logfile" ]]; then
+        echo "ERROR: logfile variable is not set." >&2
+        exit 1
+    fi
+
+    # Ensure the directory where the logfile should be written is writable.
+    if [[ ! -w "$(dirname "$logfile")" ]]; then
+        echo "ERROR: Cannot write to logfile location: $logfile" >&2
+        exit 1
+    fi
 
     # Check if the requested log level is valid
     if [[ -z "${levels[$level]+_}" ]]; then
