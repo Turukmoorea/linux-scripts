@@ -11,7 +11,7 @@
 # 1. Source this module in your script:
 #      source /path/to/logging.sh
 #    OR load it dynamically:
-#      source <(curl -s https://raw.githubusercontent.com/<user>/<repo>/main/module_log_message.sh)
+#      source <(curl -s https://raw.githubusercontent.com/Turukmoorea/linux-scripts/main/module_log_message.sh)
 #
 # 2. In your main script, define the following optional variables:
 #      logfile="/var/log/my_script.log"              # Path to your logfile (required!)
