@@ -62,7 +62,7 @@ log_message() {
     local prefix="${log_prefix:-$(basename "$0")}"                                   # Default prefix is script name
 
     # Ensure logfile variable is set before continuing
-    if [[ -z "$logfile" ]]; then
+    if [[ -z "$log_file" ]]; then
         echo "ERROR: logfile variable is not set." >&2
         exit 1
     fi
