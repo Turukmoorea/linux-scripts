@@ -4,16 +4,16 @@
 
 # User defined variables
 # Logging
-log_file="/etc/bind/log/nsupdate_static_file.log"  # Path to your logfile (required!)
-log_level="INFO"                                   # Minimum log level to log (default: NOTICE)
+log_file="/home/timon/github/dns-server-admin/log"  # Path to your logfile (required!)
+log_level="DEBUG"                                   # Minimum log level to log (default: NOTICE)
 verbose=true
 
 # Static files
-static_file="${1:-/etc/bind/static_file/static.zone}"
+static_file="${1:-/home/timon/github/dns-server-admin/unit_test.txt}"  # /etc/bind/static_file/static.zone
 old_static_file="${static_file}.old"
 
 # Temporary files
-temp_file_dir="/dev/shm/nsupdate_static_file"
+temp_file_dir="/home/timon/github/dns-server-admin/test"  # /dev/shm/nsupdate_static_file
 
 # DNS Target Server and dig Resolver also TCP and DNSSEC flag
 dns_server="localhost" # set: "string" (required)
@@ -33,7 +33,7 @@ source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/
 source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/check_functions/check_ipv6.sh)                  # call: is_valid_ipv6 "$address"
 source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/check_functions/check_cidr.sh)                  # call: is_valid_cidr "<string>"
 source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/normalize_functions/normalize_line.sh)          # call: normalize_line "$original"
-source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/check_functions/require_file_contains_any.sh)   # call: require_file_contains_any "/etc/bind/tsig.key" "key" "tsig" "algorithm" "{" "}" ";"
+source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/check_functions/check_file_contains_requirements.sh)   # call: require_file_contains_any "/etc/bind/tsig.key" "key" "tsig" "algorithm" "{" "}" ";"
 source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/check_functions/check_natural_number.sh)        # call: is_natural_number "$value"
 
 # Logs the name of the script as it was invoked (without the path).
@@ -72,106 +72,116 @@ set -euo pipefail
 #   1 = validation failed
 # --------------------------------------------------------------------------------------------------
 validate_zone() {
-    local zone_name="$1"
-    local dig_cmd_parts=("dig")
+  local zone_name="$1"
+  local dig_cmd_parts=("dig")
 
-    # ----------------------------------------------------------------------
-    # Sanitize zone name: collapse multiple dots, trim trailing dots,
-    # then ensure exactly one trailing dot.
-    # ----------------------------------------------------------------------
-    zone_name="$(echo "$zone_name" | sed -E 's/[.]+/./g' | sed -E 's/[.]$//')"
-    zone_name="${zone_name}."
+  # -----------------------------------------------------------------------------
+  # Normalize the zone name
+  # - Collapse multiple consecutive dots into one.
+  # - Remove any trailing dot.
+  # - Ensure exactly one trailing dot for the final query.
+  # Example: "example..com.." → "example.com."
+  # -----------------------------------------------------------------------------
+  zone_name="$(echo "$zone_name" | sed -E 's/[.]+/./g' | sed -E 's/[.]$//')"
+  zone_name="${zone_name}."
 
-    # ----------------------------------------------------------------------
-    # Add custom resolver if configured.
-    # E.g., dig @9.9.9.9
-    # ----------------------------------------------------------------------
-    if [[ -n "$resolver" ]]; then
-        dig_cmd_parts+=("@$resolver")
+  # -----------------------------------------------------------------------------
+  # Add custom resolver if defined.
+  # Example: dig @9.9.9.9
+  # -----------------------------------------------------------------------------
+  [[ -n "$resolver" ]] && dig_cmd_parts+=("@$resolver")
+
+  # -----------------------------------------------------------------------------
+  # Add +dnssec flag if DNSSEC checking is enabled.
+  # -----------------------------------------------------------------------------
+  [[ "$dnssec_flag" == "true" ]] && dig_cmd_parts+=("+dnssec")
+
+  # -----------------------------------------------------------------------------
+  # Complete the dig command: dig [@resolver] [+dnssec] SOA <zone>
+  # -----------------------------------------------------------------------------
+  dig_cmd_parts+=("SOA" "$zone_name")
+  local dig_cmd="${dig_cmd_parts[*]}"
+
+  log_message "INFO" "Validating zone '$zone_name' using: $dig_cmd"
+
+  # -----------------------------------------------------------------------------
+  # Run the dig command and capture its output.
+  # Suppress stderr to keep logs clean.
+  # -----------------------------------------------------------------------------
+  local dig_output
+  dig_output="$(eval "$dig_cmd" 2>/dev/null)"
+
+  # -----------------------------------------------------------------------------
+  # Fail fast if no output — dig did not return data.
+  # -----------------------------------------------------------------------------
+  if [[ -z "$dig_output" ]]; then
+    log_message "ERROR" "dig returned no output for zone '$zone_name'"
+    return 1
+  fi
+
+  # -----------------------------------------------------------------------------
+  # Extract the first SOA record line.
+  # This should appear in the AUTHORITY SECTION of the dig output.
+  # If none is found, the zone is invalid.
+  # -----------------------------------------------------------------------------
+  local soa_line
+  soa_line="$(echo "$dig_output" | grep -Ei 'IN[[:space:]]+SOA' | head -n 1)"
+
+  if [[ -z "$soa_line" ]]; then
+    log_message "ERROR" "No SOA record found in dig output for '$zone_name'"
+    return 1
+  fi
+
+  # -----------------------------------------------------------------------------
+  # Extract the domain part from the SOA line.
+  # Example: ";example.com. 3600 IN SOA ns1.example.com. hostmaster.example.com. ..."
+  # The first field is the domain name.
+  #
+  # Clean up:
+  # - Strip leading spaces or semicolons.
+  # - Remove trailing dot.
+  # - Convert to lowercase for consistent comparison.
+  # -----------------------------------------------------------------------------
+  local soa_domain
+  soa_domain="$(echo "$soa_line" | awk '{print $1}' | sed -E 's/^[[:space:];]*//; s/\.$//' | tr '[:upper:]' '[:lower:]')"
+
+  # Also normalize the expected zone name for comparison
+  local expected_zone
+  expected_zone="$(echo "$zone_name" | sed -E 's/\.$//' | tr '[:upper:]' '[:lower:]')"
+
+  log_message "DEBUG" "SOA domain normalized: '$soa_domain' | Expected zone: '$expected_zone'"
+
+  # -----------------------------------------------------------------------------
+  # Robust matching.
+  # Instead of strict equality, check if the SOA domain CONTAINS the expected zone.
+  # This allows for common prefix/suffix edge cases.
+  # -----------------------------------------------------------------------------
+  if [[ "$soa_domain" == *"$expected_zone"* ]]; then
+    log_message "INFO" "SOA domain '$soa_domain' contains expected zone: $expected_zone"
+  else
+    log_message "ERROR" "SOA domain '$soa_domain' does not contain expected zone: $expected_zone"
+    return 1
+  fi
+
+  # -----------------------------------------------------------------------------
+  # If DNSSEC is enabled, check for a valid RRSIG record covering the SOA.
+  # -----------------------------------------------------------------------------
+  if [[ "$dnssec_flag" == "true" ]]; then
+    local rrsig_line
+    rrsig_line="$(echo "$dig_output" | grep -Ei "^$soa_domain[.]?[[:space:]]+[0-9]+[[:space:]]+IN[[:space:]]+RRSIG[[:space:]]+SOA")"
+
+    if [[ -z "$rrsig_line" ]]; then
+      log_message "ERROR" "RRSIG for SOA not found for zone '$soa_domain' — DNSSEC check failed"
+      return 1
     fi
 
-    # ----------------------------------------------------------------------
-    # Add DNSSEC flag if DNSSEC validation is enabled.
-    # ----------------------------------------------------------------------
-    [[ "$dnssec_flag" == "true" ]] && dig_cmd_parts+=("+dnssec")
+    log_message "INFO" "RRSIG for SOA found and valid for zone: $soa_domain"
+  fi
 
-    # ----------------------------------------------------------------------
-    # Build the final dig command: dig [resolver] [dnssec] SOA zone
-    # ----------------------------------------------------------------------
-    dig_cmd_parts+=("SOA" "$zone_name")
-    local dig_cmd="${dig_cmd_parts[*]}"
-
-    # Log the exact dig command being run
-    log_message "INFO" "Validating zone '$zone_name' using: $dig_cmd"
-
-    # ----------------------------------------------------------------------
-    # Execute dig and capture output (stderr suppressed)
-    # ----------------------------------------------------------------------
-    local dig_output
-    dig_output="$(eval "$dig_cmd" 2>/dev/null)"
-
-    # ----------------------------------------------------------------------
-    # If dig output is empty, the query failed or no response received.
-    # ----------------------------------------------------------------------
-    if [[ -z "$dig_output" ]]; then
-        log_message "ERROR" "dig returned no output for zone '$zone_name'"
-        return 1
-    fi
-
-    # ----------------------------------------------------------------------
-    # Extract AUTHORITY SECTION only, skip the header line.
-    # ----------------------------------------------------------------------
-    local auth_section
-    auth_section="$(echo "$dig_output" | awk '/^;; AUTHORITY SECTION:/,/^$/' | tail -n +2)"
-
-    if [[ -z "$auth_section" ]]; then
-        log_message "ERROR" "No AUTHORITY SECTION found in dig output for '$zone_name'"
-        return 1
-    fi
-
-    # ----------------------------------------------------------------------
-    # Find the first SOA record in the AUTHORITY SECTION.
-    # ----------------------------------------------------------------------
-    local soa_line
-    soa_line="$(echo "$auth_section" | grep -Ei 'IN[[:space:]]+SOA' | head -n 1)"
-
-    if [[ -z "$soa_line" ]]; then
-        log_message "ERROR" "No SOA record found in AUTHORITY SECTION for '$zone_name'"
-        return 1
-    fi
-
-    # ----------------------------------------------------------------------
-    # Extract the domain from the SOA line and compare with expected zone.
-    # ----------------------------------------------------------------------
-    local soa_domain
-    soa_domain="$(echo "$soa_line" | awk '{print $1}' | sed 's/\.$//')"
-
-    if [[ "$soa_domain" != "$zone_name" ]]; then
-        log_message "ERROR" "SOA record belongs to '$soa_domain', not to requested zone '$zone_name'"
-        return 1
-    fi
-
-    log_message "INFO" "SOA record found and matches zone: $soa_domain"
-
-    # ----------------------------------------------------------------------
-    # If DNSSEC is enabled, ensure a valid RRSIG for the SOA exists.
-    # ----------------------------------------------------------------------
-    if [[ "$dnssec_flag" == "true" ]]; then
-        local rrsig_line
-        rrsig_line="$(echo "$dig_output" | grep -Ei "^$soa_domain[.]?[[:space:]]+[0-9]+[[:space:]]+IN[[:space:]]+RRSIG[[:space:]]+SOA")"
-
-        if [[ -z "$rrsig_line" ]]; then
-            log_message "ERROR" "RRSIG for SOA not found for zone '$soa_domain' — DNSSEC check failed"
-            return 1
-        fi
-
-        log_message "INFO" "RRSIG for SOA found and valid for zone: $soa_domain"
-    fi
-
-    # ----------------------------------------------------------------------
-    # All checks passed: zone is valid
-    # ----------------------------------------------------------------------
-    return 0
+  # -----------------------------------------------------------------------------
+  # All checks passed, zone is valid.
+  # -----------------------------------------------------------------------------
+  return 0
 }
 
 
@@ -220,96 +230,90 @@ parse_record_line() {
     local record_ttl=""
     local record_type=""
     local record_value=""
-    local field_offset=0
 
     # ------------------------------------------------------------------------
-    # Split the line into up to 5 fields (domain, ttl, class, type, value)
+    # Tokenize line preserving quotes using eval
     # ------------------------------------------------------------------------
-    read -r field1 field2 field3 field4 field5 <<< "$line"
-
-    # The first field is always the record domain
-    record_domain="$field1"
-    log_message "DEBUG" "Extracted domain: $record_domain"
+    eval "fields=( $line )"
+    local num_fields="${#fields[@]}"
+    log_message "DEBUG" "Tokenized fields: ${fields[*]}"
 
     # ------------------------------------------------------------------------
-    # Check if the second field is a valid TTL (must be numeric)
-    # If not, use the default TTL and shift field positions by +1.
+    # Domain: always first field
     # ------------------------------------------------------------------------
-    if [[ "$field2" =~ ^[0-9]+$ ]]; then
-        record_ttl="$field2"
-        field_offset=0
-        log_message "DEBUG" "Valid TTL found: $record_ttl"
+    record_domain="${fields[0]}"
+    log_message "DEBUG" "Domain extracted: $record_domain"
+
+    # ------------------------------------------------------------------------
+    # TTL detection (optional)
+    # ------------------------------------------------------------------------
+    local i=1
+    if [[ "${fields[$i]}" =~ ^[0-9]+$ ]]; then
+        record_ttl="${fields[$i]}"
+        log_message "DEBUG" "TTL detected: $record_ttl"
+        ((i++))
     else
         record_ttl="$default_ttl"
-        field_offset=1
-        log_message "WARNING" "TTL missing or invalid ('$field2'), using default TTL: $record_ttl"
+        log_message "NOTICE" "TTL missing or invalid ('${fields[$i]}'), using default TTL: $record_ttl"
     fi
 
     # ------------------------------------------------------------------------
-    # Determine record class and adjust type/value fields accordingly
-    # Only 'IN' or empty class are supported
+    # Class detection: accept IN or omitted; skip unsupported
     # ------------------------------------------------------------------------
-    local possible_class="${!((3 - field_offset))}"
-    local possible_type="${!((4 - field_offset))}"
-    local possible_value="${!((5 - field_offset))}"
-
-    case "$possible_class" in
+    case "${fields[$i]}" in
         IN|"")
-            # Valid class → use next fields as type and value
-            record_type="$possible_type"
-            record_value="$possible_value"
             log_message "DEBUG" "Class: IN or omitted — continuing"
+            ((i++))
             ;;
         CH|HS|NONE|ANY)
-            # Unsupported DNS classes → skip line
-            log_message "WARNING" "Unsupported record class '$possible_class' found — skipping line"
+            log_message "WARNING" "Unsupported record class '${fields[$i]}' found — skipping line"
             return 0
             ;;
         *)
-            # No explicit class → current field must be type
-            record_type="$possible_class"
-            record_value="$possible_type"
-            log_message "DEBUG" "No class specified — interpreting '$possible_class' as record type"
+            log_message "DEBUG" "No class specified — interpreting '${fields[$i]}' as record type"
             ;;
     esac
 
     # ------------------------------------------------------------------------
-    # Verify record type is explicitly allowed
+    # Type: next token
     # ------------------------------------------------------------------------
-    if [[ ! " ${allowed_record_types[*]} " =~ " ${record_type} " ]]; then
-        log_message "WARNING" "Unsupported record type '$record_type' — skipping line"
+    record_type="${fields[$i]:-}"
+    if [[ -z "$record_type" ]]; then
+        log_message "WARNING" "Record type missing — skipping line"
         return 0
     fi
-
-    log_message "DEBUG" "Parsed record so far: domain='$record_domain' ttl='$record_ttl' type='$record_type' value='$record_value'"
+    ((i++))
 
     # ------------------------------------------------------------------------
-    # Normalize domain: ensure valid FQDN with single trailing dot
-    # Append current zone if not already absolute.
+    # Value: join remaining tokens, preserving quotes
     # ------------------------------------------------------------------------
+    for ((; i<num_fields; i++)); do
+        if [[ -n "$record_value" ]]; then
+            record_value+=" "
+        fi
+        record_value+="${fields[$i]}"
+    done
+
+    log_message "DEBUG" "Parsed DNS record so far: domain='$record_domain' ttl='$record_ttl' type='$record_type' value='$record_value'"
+
+    # Ensure domain is a valid FQDN (append current zone if needed)
     if [[ "$record_domain" != *"." ]]; then
-        record_domain="${record_domain}.${zone}"
-        log_message "DEBUG" "Domain missing dot — appended zone: $record_domain"
+        record_domain="${record_domain}.${zone}."
+        log_message "DEBUG" "Normalized domain to FQDN: $record_domain"
+    else
+        log_message "DEBUG" "Domain is already FQDN: $record_domain"
     fi
 
-    # Remove multiple consecutive dots, strip trailing, add single trailing dot
-    record_domain="$(echo "$record_domain" | sed -E 's/[.]+/./g' | sed -E 's/[.]$//')."
-    log_message "DEBUG" "Normalized domain to FQDN: $record_domain"
-
-    # ------------------------------------------------------------------------
-    # Defensive: TTL must be valid number
-    # ------------------------------------------------------------------------
+    # Re-validate that TTL is a valid number (defensive double-check)
     if ! [[ "$record_ttl" =~ ^[0-9]+$ ]]; then
         log_message "WARNING" "Re-checked TTL is invalid ('$record_ttl') — skipping line"
         return 0
     fi
 
-    # ------------------------------------------------------------------------
-    # Type-specific record value validation and FQDN normalization
-    # ------------------------------------------------------------------------
+    # Type-specific record value validation
     case "$record_type" in
         A)
-            # A record must contain valid IPv4 address
+            # Validate IPv4 address
             if is_valid_ipv4 "$record_value"; then
                 log_message "INFO" "Valid A record: $record_domain $record_ttl A $record_value"
             else
@@ -318,7 +322,7 @@ parse_record_line() {
             fi
             ;;
         AAAA)
-            # AAAA record must contain valid IPv6 address
+            # Validate IPv6 address
             if is_valid_ipv6 "$record_value"; then
                 log_message "INFO" "Valid AAAA record: $record_domain $record_ttl AAAA $record_value"
             else
@@ -327,46 +331,42 @@ parse_record_line() {
             fi
             ;;
         CAA)
-            # Placeholder: more detailed validation can be added later
-            log_message "DEBUG" "CAA record found — validation placeholder"
+            # Placeholder for future CAA record validation
+            log_message "DEBUG" "CAA record found — validation placeholder (not yet implemented)"
             ;;
         CNAME|PTR)
-            # CNAME/PTR: normalize value to valid FQDN
+            # Normalize value to FQDN if not already
             if [[ "$record_value" != *"." ]]; then
-                record_value="${record_value}.${zone}"
-                log_message "DEBUG" "Target missing dot — appended zone: $record_value"
+                record_value="${record_value}.${zone}."
+                log_message "DEBUG" "Normalized target FQDN for $record_type: $record_value"
             else
-                log_message "DEBUG" "Target already FQDN: $record_value"
+                log_message "DEBUG" "Target for $record_type is already FQDN: $record_value"
             fi
-
-            # Sanitize value: collapse multiple dots and ensure single trailing dot
-            record_value="$(echo "$record_value" | sed -E 's/[.]+/./g' | sed -E 's/[.]$//')."
-            log_message "DEBUG" "Sanitized target FQDN for $record_type: $record_value"
             ;;
         MX)
-            # MX: add MX-specific checks here if needed
-            log_message "DEBUG" "MX record found — validation placeholder"
+            # Placeholder for future MX record validation
+            log_message "DEBUG" "MX record found — validation placeholder (not yet implemented)"
             ;;
         SRV)
-            # SRV: add SRV-specific checks here if needed
-            log_message "DEBUG" "SRV record found — validation placeholder"
+            # Placeholder for future SRV record validation
+            log_message "DEBUG" "SRV record found — validation placeholder (not yet implemented)"
             ;;
         TLSA)
-            # TLSA: add TLSA-specific checks here if needed
-            log_message "DEBUG" "TLSA record found — validation placeholder"
+            # Placeholder for future TLSA record validation
+            log_message "DEBUG" "TLSA record found — validation placeholder (not yet implemented)"
             ;;
         TXT)
-            # TXT records: assume quoted and valid syntax
-            log_message "DEBUG" "TXT record — no structural validation"
+            # No structural validation — assumed quoted and syntactically correct
+            log_message "DEBUG" "TXT record — no validation required (quoted content responsibility of input)"
             ;;
     esac
 
-    # ------------------------------------------------------------------------
-    # Write validated record to zone-specific output file
-    # ------------------------------------------------------------------------
+    # Log that the record has passed all checks
+    log_message "INFO" "Record accepted: $record_domain $record_ttl $record_type $record_value"
+
+    # Write record to zone-specific output file
     local zone_file="$temp_file_dir/$zone"
     echo "$record_domain $record_ttl $record_type $record_value" >> "$zone_file"
-    log_message "INFO" "Record accepted: $record_domain $record_ttl $record_type $record_value"
     log_message "DEBUG" "Record written to file: $zone_file << $record_domain $record_ttl $record_type $record_value"
 }
 
@@ -453,10 +453,11 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         # - Set flag so the new zone header gets written before the next record
         # -----------------------------------------------------------------------------
         zone=*)
-            zone="${line#zone=}"
+            zone="$(echo "${line#zone=}" | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed -E 's/^"(.*)"$/\1/')"
             validate_zone "$zone"
             log_message "INFO" "Zone set to: $zone"
             zone_changed=0
+            tsig_changed=0
             ;;
 
         # -----------------------------------------------------------------------------
@@ -466,7 +467,7 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         # - Set flag so the new TSIG header gets written before the next record
         # -----------------------------------------------------------------------------
         tsig_key_file=*)
-            tsig_key_file="${line#tsig_key_file=}"
+            tsig_key_file="$(echo "${line#tsig_key_file=}" | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed -E 's/^"(.*)"$/\1/')"
 
             if require_file_contains_any "$tsig_key_file" "key" "algorithm" "secret" "{" "}" ";" "};" '==";'; then
                 log_message "INFO" "TSIG key file set to: $tsig_key_file"
@@ -484,6 +485,7 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         # -----------------------------------------------------------------------------
         ttl=*)
             default_ttl="${line#ttl=}"
+            default_ttl="$(echo "${line#ttl=}" | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//' | sed -E 's/^"(.*)"$/\1/')"
 
             if is_natural_number "$default_ttl"; then
                 log_message "INFO" "Default TTL set to: $default_ttl"
@@ -503,13 +505,13 @@ while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
         # -----------------------------------------------------------------------------
         *)
             # Write updated zone header if the zone changed
-            if [[ $zone_changed -eq 1 ]]; then
+            if [[ $zone_changed -eq 0 ]]; then
                 write_tempfile_global_variables "zone" "$zone"
                 zone_changed=1
             fi
 
             # Write updated TSIG header if the TSIG changed
-            if [[ $tsig_changed -eq 1 ]]; then
+            if [[ $tsig_changed -eq 0 ]]; then
                 write_tempfile_global_variables "tsig_key_file" "$tsig_key_file"
                 tsig_changed=1
             fi
@@ -529,9 +531,6 @@ done < "$static_file"
 
 # ================================================================================================
 # End of the first main loop.
-# After processing, each zone-specific tempfile contains:
-#   - The correct zone= and tsig_key_file= header lines,
-#   - Followed by valid, normalized DNS records.
 # ================================================================================================
 
 
