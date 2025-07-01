@@ -277,11 +277,26 @@ parse_record_line() {
     # ------------------------------------------------------------------------
     # Type: next token
     # ------------------------------------------------------------------------
-    record_type="${fields[$i]:-}"
-    if [[ -z "$record_type" ]]; then
-        log_message "WARNING" "Record type missing — skipping line"
+    for i in "${!allowed_record_types[@]}"; do
+        allowed_record_types[$i]=$(echo "${allowed_record_types[$i]}" | tr '[:lower:]' '[:upper:]')
+    done
+
+    
+    record_type=$(echo "$record_type" | tr '[:lower:]' '[:upper:]')
+
+    allowed=false
+    for allowed_type in "${allowed_record_types[@]}"; do
+        if [[ "$record_type" == "$allowed_type" ]]; then
+            allowed=true
+            break
+        fi
+    done
+
+    if [[ "$allowed" == false ]]; then
+        log_message "WARNING" "Unsupported record type '$record_type' for domain '$domain' — skipping line"
         return 0
     fi
+
     ((i++))
 
     # ------------------------------------------------------------------------
