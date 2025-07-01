@@ -23,7 +23,7 @@ tcp_flag=true          # set: true or false
 ipv6_flag=""           # set: true, false or "" (if you want to use the default settings of the device)
 
 # ignored record types
-allowed_record_types=("A" "AAAA" "CAA" "CNAME" "MX" "PTR" "SRV" "TLSA" "TXT")   # Never set SOA and NS, they are server-critical and should not be set with this script.
+allowed_record_types=("A" "AAAA" "CAA" "CNAME" "MX" "PTR" "SRV" "TLSA" "TXT")   # Never set SOA and NS, they are server-critical and should not be set with this script. (case-insensitive)
 
 # =================================================================================================
 
@@ -234,9 +234,10 @@ parse_record_line() {
     # ------------------------------------------------------------------------
     # Tokenize line preserving quotes using eval
     # ------------------------------------------------------------------------
-    eval "fields=( $line )"
+    IFS=' ' read -r -a fields <<< "$line"   # old code: #eval "fields=( $line )"
+    
     local num_fields="${#fields[@]}"
-    log_message "DEBUG" "Tokenized fields: ${fields[*]}"
+    log_message "DEBUG" "Amount of fields: ${fields[*]}"
 
     # ------------------------------------------------------------------------
     # Domain: always first field
