@@ -234,7 +234,7 @@ parse_record_line() {
     # ------------------------------------------------------------------------
     # Tokenize line preserving quotes using eval
     # ------------------------------------------------------------------------
-    IFS=' ' read -r -a fields <<< "$line"   # old code: #eval "fields=( $line )"
+    IFS=' ' read -r -a fields <<< "$line"   # old code: eval "fields=( $line )"
     
     local num_fields="${#fields[@]}"
     log_message "DEBUG" "Amount of fields: ${fields[*]}"
@@ -278,12 +278,11 @@ parse_record_line() {
     # ------------------------------------------------------------------------
     # Type: next token
     # ------------------------------------------------------------------------
-    for i in "${!allowed_record_types[@]}"; do
-        allowed_record_types[$i]=$(echo "${allowed_record_types[$i]}" | tr '[:lower:]' '[:upper:]')
+    for idx in "${!allowed_record_types[@]}"; do
+       allowed_record_types[$i]=$(echo "${allowed_record_types[$i]}" | tr '[:lower:]' '[:upper:]')
     done
-
     
-    record_type=$(echo "$record_type" | tr '[:lower:]' '[:upper:]')
+    record_type=$(echo "${fields[$i]}" | tr '[:lower:]' '[:upper:]')
 
     allowed=false
     for allowed_type in "${allowed_record_types[@]}"; do
@@ -294,7 +293,7 @@ parse_record_line() {
     done
 
     if [[ "$allowed" == false ]]; then
-        log_message "WARNING" "Unsupported record type '$record_type' for domain '$domain' — skipping line"
+        log_message "WARNING" "Unsupported record type '$record_type' for domain '$record_domain' — skipping line"
         return 0
     fi
 
@@ -351,17 +350,45 @@ parse_record_line() {
             log_message "DEBUG" "CAA record found — validation placeholder (not yet implemented)"
             ;;
         CNAME|PTR)
-            # Normalize value to FQDN if not already
+            # Normalize value to valid FQDN:
             if [[ "$record_value" != *"." ]]; then
-                record_value="${record_value}.${zone}."
-                log_message "DEBUG" "Normalized target FQDN for $record_type: $record_value"
-            else
-                log_message "DEBUG" "Target for $record_type is already FQDN: $record_value"
+                record_value="${record_value}.${zone}"
             fi
+
+            # Clean up: collapse multiple dots and ensure single trailing dot
+            record_value="$(echo "$record_value" | sed -E 's/[.]+/./g; s/[.]$//')."
+
+            log_message "DEBUG" "Normalized target FQDN for $record_type: $record_value"
             ;;
         MX)
-            # Placeholder for future MX record validation
-            log_message "DEBUG" "MX record found — validation placeholder (not yet implemented)"
+            # MX record must have: priority (number) and target (domain)
+            # Example: MX 10 mail.example.com.
+            # So record_value must have at least 2 parts.
+
+            local mx_priority mx_target
+            IFS=' ' read -r mx_priority mx_target <<< "$record_value"
+
+            if ! [[ "$mx_priority" =~ ^[0-9]+$ ]]; then
+                log_message "WARNING" "MX record for '$record_domain' has invalid priority '$mx_priority' — skipping line"
+                return 0
+            fi
+
+            if [[ -z "$mx_target" ]]; then
+                log_message "WARNING" "MX record for '$record_domain' missing target mailserver — skipping line"
+                return 0
+            fi
+
+            if [[ "$mx_target" != *"." ]]; then
+            mx_target="${mx_target}.${zone}"
+            fi
+
+            # Collapse multiple consecutive dots and ensure single trailing dot
+            mx_target="$(echo "$mx_target" | sed -E 's/[.]+/./g; s/[.]$//')."
+
+            log_message "DEBUG" "Normalized MX target FQDN: $mx_target"
+
+            record_value="${mx_priority} ${mx_target}"
+            log_message "INFO" "Valid MX record: $record_domain $record_ttl MX $record_value"
             ;;
         SRV)
             # Placeholder for future SRV record validation
@@ -372,8 +399,16 @@ parse_record_line() {
             log_message "DEBUG" "TLSA record found — validation placeholder (not yet implemented)"
             ;;
         TXT)
-            # No structural validation — assumed quoted and syntactically correct
-            log_message "DEBUG" "TXT record — no validation required (quoted content responsibility of input)"
+            # Trim leading/trailing spaces
+            record_value="$(echo "$record_value" | sed -E 's/^[[:space:]]*//; s/[[:space:]]*$//')"
+
+            # Remove multiple double quotes at start and end
+            record_value="$(echo "$record_value" | sed -E 's/^"+//; s/"+$//')"
+
+            # Ensure exactly one pair of double quotes
+            record_value="\"$record_value\""
+
+            log_message "DEBUG" "TXT record value normalized and quoted: $record_value"
             ;;
     esac
 
