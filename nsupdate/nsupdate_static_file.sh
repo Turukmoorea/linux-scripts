@@ -4,16 +4,16 @@
 
 # User defined variables
 # Logging
-log_file="/home/timon/github/dns-server-admin/log"  # Path to your logfile (required!)
+log_file="/home/timon/github/dns-server-admin/log/log"  # Path to your logfile (required!)
 log_level="DEBUG"                                   # Minimum log level to log (default: NOTICE)
 verbose=true
 
 # Static files
-static_file="${1:-/home/timon/github/dns-server-admin/unit_test.txt}"  # /etc/bind/static_file/static.zone
+static_file="${1:-/etc/bind/static_file/static.zone}"
 old_static_file="${static_file}.old"
 
 # Temporary files
-temp_file_dir="/home/timon/github/dns-server-admin/test"  # /dev/shm/nsupdate_static_file
+temp_file_dir="/dev/shm/nsupdate_static_file"
 
 # DNS Target Server and dig Resolver also TCP and DNSSEC flag
 dns_server="localhost" # set: "string" (required)
@@ -44,6 +44,16 @@ log_message "INFO" "Script called: $(basename "$0") $*"
 # -u: Treat unset variables as an error
 # -o pipefail: Return the exit status of the last command in the pipeline that failed
 set -euo pipefail
+
+cleanup() {
+  local exit_code=$?
+  log_message "INFO" "Cleaning up temp files in: $temp_file_dir (Exit code: $exit_code)"
+  rm -rf "$temp_file_dir"
+  log_message "INFO" "Cleanup done. Script exiting with code $exit_code."
+  exit $exit_code
+}
+
+trap cleanup EXIT INT TERM
 
 
 # --------------------------------------------------------------------------------------------------
@@ -95,6 +105,15 @@ validate_zone() {
   # Add +dnssec flag if DNSSEC checking is enabled.
   # -----------------------------------------------------------------------------
   [[ "$dnssec_flag" == "true" ]] && dig_cmd_parts+=("+dnssec")
+
+  # -----------------------------------------------------------------------------
+  # Add -4 or -6 if ipv6_flag is set.
+  # -----------------------------------------------------------------------------
+  if [[ "$ipv6_flag" == "true" ]]; then
+    dig_cmd_parts+=("-6")
+  elif [[ "$ipv6_flag" == "false" ]]; then
+    dig_cmd_parts+=("-4")
+  fi
 
   # -----------------------------------------------------------------------------
   # Complete the dig command: dig [@resolver] [+dnssec] SOA <zone>
@@ -416,7 +435,7 @@ parse_record_line() {
     log_message "INFO" "Record accepted: $record_domain $record_ttl $record_type $record_value"
 
     # Write record to zone-specific output file
-    local zone_file="$temp_file_dir/$zone"
+    local zone_file="$temp_file_dir/processing_static_file/$zone"
     echo "$record_domain $record_ttl $record_type $record_value" >> "$zone_file"
     log_message "DEBUG" "Record written to file: $zone_file << $record_domain $record_ttl $record_type $record_value"
 }
@@ -584,7 +603,132 @@ done < "$static_file"
 # End of the first main loop.
 # ================================================================================================
 
+# --------------------------------------------------------------------------------------------------
+# validate_record: Prüft, ob ein Record existiert und validiert ihn optional mit DNSSEC
+# --------------------------------------------------------------------------------------------------
+validate_record() {
+  local fqdn="$1"   # Vollständiger Domainname
+  local type="$2"   # Record Type (A, AAAA, MX, etc.)
 
-# Das Static File ist verarbeitet und validiert. Nun müssen die aufbereiteten files auf den Server geladen werden.
+  local dig_cmd_parts=("dig")
+  [[ -n "$resolver" ]] && dig_cmd_parts+=("@$resolver")
+  [[ "$dnssec_flag" == "true" ]] && dig_cmd_parts+=("+dnssec")
+  [[ "$tcp_flag" == "true" ]] && dig_cmd_parts+=("+tcp")
 
+  if [[ "$ipv6_flag" == "true" ]]; then
+    dig_cmd_parts+=("-6")
+  elif [[ "$ipv6_flag" == "false" ]]; then
+    dig_cmd_parts+=("-4")
+  fi
+
+  dig_cmd_parts+=("$fqdn" "$type")
+  local dig_cmd="${dig_cmd_parts[*]}"
+
+  log_message "INFO" "Validating record: $dig_cmd"
+
+  local dig_output
+  dig_output="$(eval "$dig_cmd" 2>/dev/null)"
+
+  if [[ -z "$dig_output" ]]; then
+    log_message "INFO" "Record '$fqdn $type' does not exist → will be added"
+    return 1
+  fi
+
+  if [[ "$dnssec_flag" == "true" ]]; then
+    local rrsig_line
+    rrsig_line="$(echo "$dig_output" | grep -Ei "^$fqdn[.]?[[:space:]]+[0-9]+[[:space:]]+IN[[:space:]]+RRSIG[[:space:]]+$type")"
+
+    if [[ -z "$rrsig_line" ]]; then
+      log_message "WARNING" "Record '$fqdn $type' exists but missing RRSIG → skipping (DNSSEC required)"
+      return 2
+    fi
+    log_message "INFO" "Record '$fqdn $type' exists with valid RRSIG"
+  else
+    log_message "INFO" "Record '$fqdn $type' exists"
+  fi
+
+  return 0
+}
+
+# --------------------------------------------------------------------------------------------------
+# process_tempfile: Parst die vorbereiteten Tempfiles und baut pro Zone+TSIG ein nsupdate-File
+# --------------------------------------------------------------------------------------------------
+process_tempfile() {
+  local tempfile="$1"
+  mkdir -p "$temp_file_dir/create_nsupdate_file"
+
+  local zone=""
+  local tsig_key_file=""
+  local nsupdate_file=""
+  local mapping_file="$temp_file_dir/tsig_key_mapping.txt"
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    if [[ "$line" =~ ^zone= ]]; then
+      zone="$(echo "${line#zone=}" | sed -E 's/^"//; s/"$//')"
+      log_message "INFO" "Zone switched to: $zone"
+
+    elif [[ "$line" =~ ^tsig_key_file= ]]; then
+      tsig_key_file="$(echo "${line#tsig_key_file=}" | sed -E 's/^"//; s/"$//')"
+      log_message "INFO" "TSIG switched to: $tsig_key_file"
+
+    elif [[ -n "$line" ]]; then
+      if [[ -z "$zone" || -z "$tsig_key_file" ]]; then
+        log_message "ERROR" "Missing zone or TSIG key before processing record"
+        exit 1
+      fi
+
+      # Extrahiere Felder: domain ttl type value...
+      IFS=' ' read -r domain ttl type value <<< "$line"
+
+      # Validieren
+      validate_record "$domain" "$type"
+      local status=$?
+
+      # Filename bauen: safe TSIG name ohne Slashes
+      local safe_tsig_key_name
+      safe_tsig_key_name="$(basename "$tsig_key_file")"
+      nsupdate_file="$temp_file_dir/create_nsupdate_file/${zone}_${safe_tsig_key_name}"
+
+      # Mapping schreiben, falls neu
+      if ! grep -q "^${zone}_${safe_tsig_key_name}|" "$mapping_file" 2>/dev/null; then
+        echo "${zone}_${safe_tsig_key_name}|$tsig_key_file" >> "$mapping_file"
+        log_message "INFO" "Mapping added: ${zone}_${safe_tsig_key_name}|$tsig_key_file"
+      fi
+
+      # Header nur einmal pro File
+      if [[ ! -f "$nsupdate_file" ]]; then
+        {
+          echo "server $dns_server"
+          echo "zone $zone"
+          echo
+        } >> "$nsupdate_file"
+      fi
+
+      if [[ $status -eq 1 ]]; then
+        # Nicht vorhanden → Add
+        {
+          echo "update add $domain $ttl $type $value"
+          echo "send"
+          echo "answer"
+          echo
+        } >> "$nsupdate_file"
+        log_message "INFO" "Prepared ADD for '$domain $type'"
+
+      elif [[ $status -eq 0 ]]; then
+        # Vorhanden → Delete & Add
+        {
+          echo "update delete $domain $type"
+          echo "update add $domain $ttl $type $value"
+          echo "send"
+          echo "answer"
+          echo
+        } >> "$nsupdate_file"
+        log_message "INFO" "Prepared UPDATE (delete/add) for '$domain $type'"
+
+      else
+        log_message "INFO" "Skipped record '$domain $type' due to missing RRSIG"
+      fi
+    fi
+  done < "$tempfile"
+}
 
