@@ -81,6 +81,23 @@ Each function must have a detailed English docstring block and should be kept as
 * Debug mode raises logging level to DEBUG.
 * Logging output can go only to a logfile or optionally be mirrored live to the console using a `verbose` flag.
 * Failing commands must be logged with the exact command, exit status, and debug information.
+* **Verified Logging Only:**
+  Never log assumptions or unverified statements.
+  Any success message **must** be validated by explicitly checking the command’s exit status or output before logging it as successful.
+  Example:
+
+  ```bash
+  if command_that_should_succeed; then
+      log_message "INFO" "Command succeeded."
+  else
+      log_message "ERROR" "Command failed with exit status $?."
+      exit 1
+  fi
+  ```
+
+  * Logging must always reflect the actual state, not an expectation.
+  * This avoids misleading log entries and ensures debugging remains traceable and reliable.
+
 
 ---
 
@@ -128,3 +145,21 @@ Each function must have a detailed English docstring block and should be kept as
   ```
 
 * This keeps the main script readable and modularly maintainable.
+
+---
+
+## 8. Mandatory Cleanup and Verified Logging
+
+* **Mandatory `cleanup` function:**
+  Every script **must** implement a robust `cleanup` function, which is always triggered by `trap` on script exit (`EXIT`), interruption (`INT`) or termination (`TERM`).
+  Example:
+
+  ```bash
+  trap cleanup EXIT INT TERM
+  ```
+
+  The `cleanup` function must safely handle:
+
+  * Deletion of all temporary files and debug artefacts.
+  * Restoration of any system state changes.
+  * Final log message confirming all resources were released.
