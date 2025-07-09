@@ -1,4 +1,4 @@
-# Bash Script Style Guide
+# Bash Script Conventions
 
 ## 1. Script Header
 
