@@ -297,8 +297,7 @@ validate_zone() {
   # - Ensure exactly one trailing dot for the final query.
   # Example: "example..com.." >> "example.com."
   # -----------------------------------------------------------------------------
-  zone_name="$(echo "$zone_name" | sed -E 's/[.]+/./g' | sed -E 's/[.]$//')"
-  zone_name="${zone_name}."
+  zone_name="$(echo "$zone_name" | sed -E 's/[.]+/./g; s/[.]+$//; s/$/./')"
 
   # -----------------------------------------------------------------------------
   # Add custom resolver if defined.
