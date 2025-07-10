@@ -1,7 +1,7 @@
 #!/bin/bash
 
 # Logs the full command used to invoke the script, including all arguments.
-invocation_command=$(basename "$0")
+INVOCATION_COMMAND=$(basename "$0")
 
 set -euo pipefail
 
@@ -13,11 +13,14 @@ verbose=true                                  # true = also print to console
 logfile="/var/log/nsupdate_static.log"        # Log file path
 
 # Individual use case configuration
-IPV4_ONLY=false
+IPV4_ONLY=true
 IPV6_ONLY=false
 TCP_ONLY=true
 PORT=""
 PUBLIC_IPV4="$(curl -sS -4 ifconfig.me 2>/dev/null)"
+
+UPDATE_TEMP_FILE=""
+TSIG_TEMP_FILE=""
 
 update_file() {
 # Temporary nsupdate input file
@@ -30,7 +33,6 @@ cat <<EOF > "$UPDATE_TEMP_FILE"
 server dns.example.ch
 zone example.ch.
 
-prereq yxrrset test.example.ch A
 update delete test.example.ch A
 update add test.example 300 IN A $PUBLIC_IPV4
 
@@ -47,107 +49,33 @@ EOF
 tsig_file() {
     # Create a temporary file in /dev/shm (a RAM-backed tmpfs mount).
     # This ensures the key is stored only in memory and not written to disk. NOTE: Significantly reduces the possibility of compromising the key
-    tsig_temp_file=$(mktemp /dev/shm/keyfile.XXXXXX)
+    TSIG_TEMP_FILE=$(mktemp /dev/shm/keyfile.XXXXXX)
 
     # Write a static TSIG key into the temporary file.
     # NOTE: This is an example key and should be replaced in production environments.
-    cat <<EOF > "$tsig_temp_file"
-key "sample" {
-        algorithm hmac-sha256;
-        secret "W63dd/63iP0ZqTRCGyCXg+h5XsVGjJRMEr79CSw997U=";
+    cat <<EOF > "$TSIG_TEMP_FILE"
+key "ddns_TMBB-FW01" {
+        algorithm hmac-sha512;
+        secret "gd8RsyFLrx10cS+/7dB+BmEoN5JFcx2JSm5TeLgclyIqRnWkHUp796s1ZY/th9x5iAZNGTd2hJzDhVcw0u3Q9g==";
 };
+
 EOF
 
     # Restrict permissions on the temporary key file to owner-only access.
-    chmod 600 "$tsig_temp_file"
+    chmod 600 "$TSIG_TEMP_FILE"
 
     # Log the location of the temporary key file for debugging.
-    log_message "DEBUG" "Temporary TSIG key file created in RAM: $tsig_temp_file"
+    log_message "DEBUG" "Temporary TSIG key file created in RAM: $TSIG_TEMP_FILE"
 
     # Set the global keyfile variable to point to the temporary file.
-    keyfile="$tsig_temp_file"
+    keyfile="$TSIG_TEMP_FILE"
 }
 
 # Logging ===========================================================================================================================================
 
-# Ensure logfile variable is set before continuing
-if [[ -z "$logfile" ]]; then
-    echo "ERROR: logfile variable is not set." >&2
-    exit 1
-fi
+source <(curl -s https://raw.githubusercontent.com/Turukmoorea/bashmod_lib/refs/heads/master/log_functions/log_message.sh)
 
-# Ensure the directory where the logfile should be written is writable.
-if [[ ! -w "$(dirname "$logfile")" ]]; then
-    echo "ERROR: Cannot write to logfile location: $logfile" >&2
-    exit 1
-fi
-
-# Logging function with full syslog-style severity level support.
-# Parameters:
-#   $1 - Log level (e.g. DEBUG, INFO, NOTICE, WARNING, ERROR, etc.)
-#   $2 - Log message to output
-log_message() {
-    local level="$1"
-    local message="$2"
-    local timestamp
-    timestamp=$(date +"%Y-%m-%dT%H:%M:%S%z")  # Generate a timestamp in ISO 8601 format with timezone
-
-    # Define numeric values for log levels (based on syslog standard)
-    declare -A levels=(
-        [EMERGENCY]=0 [ALERT]=1 [CRITICAL]=2 [ERROR]=3
-        [WARNING]=4 [NOTICE]=5 [INFO]=6 [DEBUG]=7
-    )
-
-    local min_level="${log_level:-NOTICE}"                                           # Minimum level to log (default: NOTICE)
-    local log_file="${logfile:-/var/log/${log_prefix:-$(basename "$0" .sh)}.log}"    # Fallback logfile path if not set
-    local is_verbose="${verbose:-false}"                                             # Whether to also print to stdout
-    local function_name="${FUNCNAME[1]:-main}"                                       # Calling function's name (fallback: 'main')
-    local line_number="${BASH_LINENO[0]}"                                            # Line number where the log_message was called
-    local prefix="${log_prefix:-$(basename "$0")}"                                   # Default prefix is script name
-
-    # Check if the requested log level is valid
-    if [[ -z "${levels[$level]+_}" ]]; then
-        echo "Invalid log level: $level" >&2
-        return 1
-    fi
-
-    # Check if the configured minimum log level is valid
-    if [[ -z "${levels[$min_level]+_}" ]]; then
-        echo "Invalid configured log level: $min_level" >&2
-        return 1
-    fi
-
-    # Only log messages that meet or exceed the configured minimum log level
-    if [[ ${levels[$level]} -le ${levels[$min_level]} ]]; then
-        local formatted="${timestamp} ${prefix}[${level}]: Line:${line_number} (${function_name}) ${message}"
-
-        # Write to logfile
-        echo "$formatted" >> "$log_file"
-
-        # Optionally write to console (stdout) with color
-        if [[ "$is_verbose" == true && -t 1 ]]; then
-            local color=""
-            case "$level" in
-                DEBUG) color="\033[0;37m" ;;     # grey
-                INFO) color="\033[0;32m" ;;      # green
-                NOTICE) color="\033[0;36m" ;;    # cyan
-                WARNING) color="\033[0;33m" ;;   # yellow
-                ERROR|CRITICAL|ALERT|EMERGENCY) color="\033[0;31m" ;; # red
-                *) color="\033[0m" ;;            # reset (default)
-            esac
-            echo -e "${color}${formatted}\033[0m"
-        elif [[ "$is_verbose" == true ]]; then
-            echo "$formatted"
-        fi
-
-        # Also write to stderr if level is ERROR or more severe
-        if [[ ${levels[$level]} -le 3 ]]; then
-            echo "$formatted" >&2
-        fi
-    fi
-}
-
-log_message "INFO" "Script called: $invocation_command $*"
+log_message "INFO" "Script called: $INVOCATION_COMMAND $*"
 
 # Helppage ============================================================================================================
 
@@ -181,7 +109,6 @@ Generate with:
 server dns.example.ch
 zone example.ch.
 
-prereq nxrrset test.example.ch A
 update add test.example.ch 300 IN A 192.0.2.42
 
 send
@@ -192,7 +119,6 @@ answer
 server dns.example.ch
 zone example.ch.
 
-prereq yxrrset test.example.ch A
 update delete test.example.ch A
 update add test.example.ch 300 IN A 198.51.100.99
 
@@ -204,7 +130,6 @@ answer
 server dns.example.ch
 zone example.ch.
 
-prereq yxrrset test.example.ch A
 update delete test.example.ch A
 
 send
@@ -270,7 +195,7 @@ cleanup() {
     shred -u --force --zero --remove=wipesync "$keyfile"
 
     # Delete the temporary nsupdate instruction file
-    rm -f "$update_temp_file"
+    rm -f "$UPDATE_TEMP_FILE"
 
     log_message "DEBUG" "Temporary files deleted"
 }
